@@ -1511,9 +1511,6 @@ if __name__ == "__main__":
     exploration_level_p1 = None
     exploration_level_p2 = None
 
-    with open("p1_p2_min_len_pu.txt", "a") as f:
-        f.write(f"{p1.name} {p2.name} {min_len_pu1} {min_len_pu2}\n")
-
     # Use seed alignment only in case of identical sequences
     if seed_alignment and p1.seq != p2.seq:
         sys.exit("Error: The seed alignment option is only possible when both input PDBs have identical sequences\n\
