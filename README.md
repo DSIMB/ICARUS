@@ -2,7 +2,7 @@
 
 **Icarus** (flex**I**ble stru**C**tural **A**lignment based on p**R**otein **U**nit**S**) **is a program for flexible structural alignement.**  
 
-Icarus is a method which uses the Protein Peeling algorithm (Gelly et al. (2006a), Gelly et al. (2006b), Gelly et al. (2011), Postic et al. (2017)) to identify compact regions i.e Protein Units (PUs). PUs define rigid regions to be aligned to the target and delimit hinge positions in the structure.  
+Icarus is a method which uses the Protein Peeling algorithm (Gelly et al. (2006a), Gelly et al. (2006b), Gelly et al. (2011), Postic et al. (2017), Cretin et al. (2022)) to identify compact regions i.e Protein Units (PUs). PUs define rigid regions to be aligned to the target and delimit hinge positions in the structure.  
 Protein Peeling allows a hierarchical segmentation of a protein into compact "independent" domains (i.e that maximise intra-domain contact while minimizing inter-domain contact).  
 A protein can be divided into different exploration levels, each level containing more and more PUs as the level rises. The user can choose between different exploration levels:  
 | Exploration level | Max number of Protein Units to consider (up to)  |
