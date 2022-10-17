@@ -1,14 +1,21 @@
 ### BUILD-STAGE: conda environment
 ##################################
 
-FROM continuumio/miniconda3 AS conda_build
+FROM condaforge/mambaforge:4.14.0-0 AS mamba_build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ libc-dev\
+    && rm -rf /var/lib/apt/lists/*
 
 # Install required python dependencies
 COPY environment.yml .
-RUN conda env create -f environment.yml
+
+RUN mamba env create -f environment.yml && \
+    mamba clean --all --yes
 
 # Install conda-pack:
-RUN conda install -c conda-forge conda-pack
+RUN mamba install -c conda-forge conda-pack -y && \
+    mamba clean --all --yes
 
 # Use conda-pack to create a standalone icarus environment in /venv:
 RUN conda-pack -j -1 -n icarus -o /tmp/icarus_env.tar && \
@@ -26,21 +33,20 @@ RUN /venv/bin/conda-unpack
 ###############################################
 FROM ubuntu:20.04 AS compile
 
-COPY --from=conda_build /venv /venv
+COPY --from=mamba_build /venv /venv
 
 # g++ required to compile TM-align
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update \ 
+    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
     g++ \
+    ca-certificates \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /icarus
+# Install ICARUS
+RUN git clone https://github.com/DSIMB/ICARUS.git /icarus
 
-# Copy sources to build the program
-COPY bin/ bin/
-COPY data/ data/
-COPY src/ src/
-COPY icarus.py icarus.py
-COPY install.sh install.sh
+WORKDIR /icarus
 
 # Compile TM-align, install SWORD
 # and create directories
@@ -59,11 +65,11 @@ LABEL maintainer="gabriel.cretin@u-paris.fr"
 WORKDIR /icarus
 
 # Keep only necessary files from previous stages: conda env & icarus
-COPY --from=conda_build /venv /venv
+COPY --from=mamba_build /venv /venv
 COPY --from=compile /icarus /icarus
 
 # Use `bash --login`:
-SHELL ["/bin/bash", "--login", "-c"]
+SHELL ["/bin/bash", "-l", "-c"]
 
 # Activate the conda environment by setting env paths
 ENV PATH="/venv/bin:$PATH"

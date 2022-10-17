@@ -43,64 +43,39 @@ When given a pair of proteins to align, the program will generate several output
 Icarus is available as a Docker image (143.42 MB compressed, 391MB MB on disk).  
 You can either pull the latest image from Dockerhub:  
 ```
-docker pull dsimb/icarus:latest
+docker pull dsimb/icarus
 ```
-
-or build it yourself:  
-```
-git clone https://www.dsimb.inserm.fr/git/nzimmermann/icarus.git
-cd icarus
-
-# Build the image and tag it icarus
-docker build -t icarus .
-```  
 
 Run the image:  
 ```
-# 1. Bind mount the local current repository `$(pwd)` (or any **absolute** path)
-#    to the project's directory inside the docker image `/icarus`
-# 2. When bind mounting local directory, set --user option, otherwise output files will be owned by root
-# 3. Set internal /dev/shm size as your RAM size, it is used to write tmp files for faster processing.
-#    The space used depends on several parameters, but a good value generally is >=1 GB.
-#    If an error occures about lack of space on device, increase this value.
-#    For convenience the following command lines (Linux or Mac) retrieve the max value of RAM available
-#    For windows users, please set shm variable manually: shm!<int>
+# Set internal /dev/shm size as your RAM size, it is used to write tmp files for faster processing.
+# The space used depends on several parameters, but a good value generally is >=1 GB.
+# If an error occures about lack of space on device, increase this value.
+# For convenience the following command lines (Linux or Mac) retrieve the max value of RAM available
+# For windows users, please set shm variable manually: shm!<int>
 shm=$(free -g | awk '/^Mem:/{print $2}')gb # linux
 shm=$(system_profiler SPHardwareDataType | grep "Memory:" | awk '{print $2}')gb # MacOS
-docker run -it --user "$(id -u):$(id -g)" --shm-size $shm -v $(pwd):/icarus icarus -p1 ./prot1.pdb -p2 ./prot2.pdb
+mkdir icarus_output
+docker run -it --shm-size $shm -v $(pwd)/icarus_output:/icarus/icarus_output -v ./data:/data dsimb/icarus -p1 /data/RIPC/d1adl__.pdb -p2 /data/RIPC/d1mup__.pdb
 
 # Show help
-docker run -it icarus
+docker run dsimb/icarus
 ```
 
 ### Docker - MacOS (Apple Silicon M1)  
 
 Docker Desktop >= 3.3.1 is required.
-For the ARM64 architecture of Apple Silicon M1 CPU, there is an additional option to add to all docker command: `--platform linux/arm64`:  
+For the ARM64 architecture of Apple Silicon M1(+) CPU, there is an additional option to add to all docker command: `--platform linux/arm64`:  
 
 ```
 # Build the image and tag it icarus
 docker build --platform linux/arm64 -t icarus .
 
 # Run the image
-docker run --platform linux/arm64 -it --user "$(id -u):$(id -g)" --shm-size $shm -v $(pwd):/icarus icarus -p1 ./prot1.pdb -p2 ./prot2.pdb
+docker run --platform linux/arm64 -it --shm-size $shm -v $(pwd)/icarus_output:/icarus/icarus_output -v ./data:/data dsimb/icarus -p1 /data/RIPC/d1adl__.pdb -p2 /data/RIPC/d1mup__.pdb
 ```
 
 ## Dependencies
-
-In order to work, ICARUS relies on several programs (in-lab or third-party) that are included in the bin directory of the git repository.  
-These are **TM-align**, **SWORD** and **gdt2.pl**.
-
-**Software dependencies**:
-* python>=3.8
-* perl
-* g++
-
-**Python dependencies**:
-* networkx
-* multiprocessing
-
-## Setup
 
 First, you need to run the installer in order to deploy the workspace.
 This will essentially compile and install SWORD and its dependencies,  
@@ -117,6 +92,8 @@ If you are familiar with conda, you should create an environment using the `envi
 ```bash
 # Create the environment
 conda env create -f environment.yml
+or
+mamba env create -f environment.yml
 # Activate the environment
 conda activate icarus
 ```

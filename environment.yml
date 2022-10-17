@@ -1,12 +1,8 @@
 name: icarus
 channels:
-  - defaults
   - conda-forge
 dependencies:
-  - python=3.9
-  - networkx=2.6.2
-  - pip
-  - perl
-  - pip:
-    - numpy
-    - ProDy
+  - python=3.10
+  - networkx=2.8.7
+  - prody=2.2.0
+  - perl=5.32.1
