@@ -101,11 +101,10 @@ class Protein:
         else:
             self.path = path
             # get last part of path i.e name
-            self.name = os.path.basename(path)[:-4]
+            self.name = os.path.basename(os.path.splitext(path)[0])
         self._set_length()
         if peel:
             PUs = self._set_PUs()
-            self.name = self.name[:-4]
             for level, pus in enumerate(PUs):
                 id_pu = 1
                 self.PUs_per_level[level] = {}

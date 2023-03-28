@@ -1217,8 +1217,8 @@ def clean_input_pdb_files(path1, path2, chain1, chain2):
     # - Check if it is a legitimate amino acids PDB
     ori_res_num_and_chain1 = {}
     ori_res_num_and_chain2 = {}
-    new_path1 = os.path.join(TMP_DIR, os.path.basename(path1))
-    new_path2 = os.path.join(TMP_DIR, os.path.basename(path2))
+    new_path1 = os.path.join(TMP_DIR, os.path.basename(os.path.splitext(path1)[0]))
+    new_path2 = os.path.join(TMP_DIR, os.path.basename(os.path.splitext(path2)[0]))
     len1 = utils.reformat_struct(path1, ori_res_num_and_chain1, chain1, new_path = new_path1)
     len2 = utils.reformat_struct(path2, ori_res_num_and_chain2, chain2, new_path = new_path2)
     print("done\n")

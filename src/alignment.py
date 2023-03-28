@@ -121,7 +121,9 @@ class Alignment:
 
         alignment = f"{ali}/kpax_results/{target.name}_{query.name}_flex.pdb"
         # Superimpose query to target with KPAX (1st structure is rigid and kpax aligns the 2nd onto the 1st one).
-        opt = ["-flex", "-nosubdirs", "-mask", "-conect", "-pdb", target.path, query.path]
+        opt = ["-flex", "-nosubdirs", "-nohex", "-novmd", "-nojmol", "-nomatrix",
+               "-nosse", "-nofasta", "-nopir", "-nokrmsd", "-noprofit", "-nohits",
+               "-notops", "-norank", "-norainbow", "-pdb", target.path, query.path]
         output = subprocess.run([KPAX] + opt, cwd=ali, capture_output=True)
         res = output.stdout.decode("utf-8").split("\n")
         if self.save_output:
@@ -175,26 +177,26 @@ class Alignment:
             for line in filin:
                 line = line.strip()
                 if not line.startswith("#"):
-                    query, target, _ = line.split("|")
+                    target, query, star = line.split("|")
                     # Aligned residues
-                    if "*" in line:
+                    if star.strip() == "*":
                         q_chain, q_resnum, q_resname = query.strip().split(":")
                         t_chain, t_resnum, t_resname = target.strip().split(":")
                         core_pu_pos.append(int(q_resnum))
                         core_target_pos.append(int(t_resnum))
+                        pu_pos.append(int(q_resnum))
                         target_pos.append(int(t_resnum))
                         target_seq += t_resname
                         pu_seq += q_resname
-                        pu_pos.append(int(q_resnum))
                     # Not aligned residues
-                    else:
-                        if query.strip() != "-":
-                            q_chain, q_resnum, q_resname = query.strip().split(":")
-                            pu_pos.append(int(q_resnum))
-                        if target.strip() != "-":
-                            t_chain, t_resnum, t_resname = target.strip().split(":")
-                            target_pos.append(int(t_resnum))
-        return core_pu_pos, core_target_pos, target_pos, pu_pos, pu_seq, target_pos, target_seq
+                    # else:
+                    #     if query.strip() != "-":
+                    #         q_chain, q_resnum, q_resname = query.strip().split(":")
+                    #         pu_pos.append(int(q_resnum))
+                    #     if target.strip() != "-":
+                    #         t_chain, t_resnum, t_resname = target.strip().split(":")
+                    #         target_pos.append(int(t_resnum))
+        return core_pu_pos, core_target_pos, target_pos, pu_pos, pu_seq, target_seq
 
     def _get_match(self):
         """
@@ -207,13 +209,9 @@ class Alignment:
         Attributes:
             - set self.all_aligned
         """
-        aa_dict = {'CYS': 'C', 'ASP': 'D', 'SER': 'S', 'GLN': 'Q', 'LYS': 'K',
-                   'ILE': 'I', 'PRO': 'P', 'THR': 'T', 'PHE': 'F', 'ASN': 'N', 
-                   'GLY': 'G', 'HIS': 'H', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W', 
-                   'ALA': 'A', 'VAL': 'V', 'GLU': 'E', 'TYR': 'Y', 'MET': 'M'}
         # Get the best core matching residues between query and target according to KPAX
         # and get all the atom coordinates of the *best* aligned residues in the query and target
-        core_pu_pos, core_target_pos, target_pos, pu_pos, pu_seq, target_pos, target_seq = self._get_core_and_all_matching_residues()    
+        core_pu_pos, core_target_pos, target_pos, pu_pos, pu_seq, target_seq = self._get_core_and_all_matching_residues() 
         self.all_aligned = {"core_pu_aligned_positions": core_pu_pos,
                             "core_target_aligned_positions": core_target_pos,
                             "all_pu_aligned_positions": pu_pos,
@@ -227,6 +225,10 @@ class Alignment:
         rotational translation during KPAX. The query stays rigid.
         Stores informations in Alignment.new_query and Alignment.new_target
         variables.
+
+        KPAX flexible alignment means that the query is flexibly aligned onto the rigid target,
+        in the output files we get this naming convention:
+            <query_name>_<target_name>_flex.pdb and the rigid query file <query_name>_query.pdb
 
         Attributes:
             - set self.new_query
