@@ -277,7 +277,7 @@ class PU(Protein):
             raise OSError("'{}': No such file or directory".format(path))
         self.path = path
         self.name = path.split("/")
-        self.name = "{}-{}".format(self.name[-3][:-4], self.name[-1][:-4])
+        self.name = "{}".format(self.name[-1][:-4])
         # Get PU start and end from Protein Peeling output
         search = re.search(r"_(\d+)_(\d+)$", self.name)
         if search:

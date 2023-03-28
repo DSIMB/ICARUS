@@ -261,9 +261,9 @@ def renum_ori_pdb_resnum(path, ori_res_num_and_chain, new_path=None):
                 filout.write(atom)
 
 
-def renum_ori_pdb_resnum_tmalign(path, ori_res_num_and_chain1, ori_res_num_and_chain2):
+def renum_ori_pdb_resnum_kpax(path, ori_res_num_and_chain1, ori_res_num_and_chain2):
     """
-    Write the original residue number of each residue for both query and target in the TM-align result output.
+    Write the original residue number of each residue for both query and target in the KPAX result output.
 
     Args:
         - path (str): path to the PDB file

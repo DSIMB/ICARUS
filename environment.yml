@@ -1,8 +1,13 @@
 name: icarus
 channels:
   - conda-forge
+  - rapidsai
+  - nvidia
+  - anaconda
 dependencies:
-  - python=3.10
-  - networkx=2.8.7
+  - python=3.10.9
+  - networkx=3.0
+  - cugraph=23.02.00
+  - cudatoolkit=11.8
   - prody=2.2.0
   - perl=5.32.1

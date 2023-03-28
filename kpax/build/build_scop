@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+#  import a SCOP database into Kpax ...
+#
+#  YOU WILL NEED TO EDIT THIS SCRIPT TO MAKE IT WORK!
+#
+#  This script assumes you have downloaded the SCOP PDB files
+#  and that you have also downloaded the SCOP list of domain names. 
+#
+#  For example, the files for version 1.75 (40% sequence identity filter)
+#  are available here:
+#
+#  http://scop.mrc-lmb.cam.ac.uk/scop/parse/dir.cla.scop.txt_1.75
+#  http://astral.berkeley.edu/pdbstyle-sel-gs-bib-40-1.75.tgz
+#  
+#  This script assumes you have a folder called "kpax_database". 
+#  Assume you have something like: KPAX_DATABASE=/home/dritchie/kpax_database
+
+if [ -z "${KPAX_DATABASE}" ]; then
+   echo "Please define the variable KPAX_DATABASE first!"
+   exit
+fi
+
+#  remove previous database 
+
+rm -rf ${KPAX_DATABASE}/scop_kpax
+
+# assume the above SCOP data is here (EDIT THIS!)
+
+SCOP_ROOT=/data/Scop
+SCOP_ROOT=/home/ritchied/Scop-175B
+
+# make the import follow the style for Cath
+
+if [ ! -f "${KPAX_DATABASE}/ScopDomainList" ]; then
+
+   ln -s ${SCOP_ROOT}/dir.cla.scop.1.75B-2013-06-20.txt ${KPAX_DATABASE}/ScopDomainList
+fi
+
+# make a list of PDB file names
+
+ls -1 ${SCOP_ROOT}/pdbstyle-1.75B/*/*.ent > ${KPAX_DATABASE}/ScopFiles
+
+# load the PDB files from from this list and make a SCOP-flavoured database 
+# in ${KPAX_DATABASE}/scop_kpax
+
+kpax -scop -build=scop -stats -source=${KPAX_DATABASE}/ScopFiles
+
+#
+#  You can now query the database using:
+#
+#  kpax -db=scop  query-file.pdb
+#
+

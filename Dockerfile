@@ -43,6 +43,14 @@ RUN apt-get update \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+# Install KPAX
+RUN wget http://kpax.loria.fr/download/kpax-5.1.3-x64-mint18.3.tgz && \
+    tar -xf kpax-5.1.3-x64-mint18.3.tgz && \
+    rm -f kpax-5.1.3-x64-mint18.3.tgz && \
+    ln -s /kpax/bin/kpax5.1.3.x64 /kpax/bin/kpax5.0.2.x64 && \
+    ldconfig
+
+
 # Install ICARUS
 RUN git clone https://github.com/DSIMB/ICARUS.git /icarus
 
@@ -64,9 +72,14 @@ LABEL maintainer="gabriel.cretin@u-paris.fr"
 
 WORKDIR /icarus
 
+ENV KPAX_ROOT=/kpax
+ENV PATH=${PATH}:${KPAX_ROOT}/bin
+ENV KPAX_RESULTS=/tmp/kpax_results
+
 # Keep only necessary files from previous stages: conda env & icarus
 COPY --from=mamba_build /venv /venv
 COPY --from=compile /icarus /icarus
+COPY --from=compile /kpax /kpax
 
 # Use `bash --login`:
 SHELL ["/bin/bash", "-l", "-c"]

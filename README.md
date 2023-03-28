@@ -324,7 +324,7 @@ TM-align output for information.
 work/results/d1adl___and_d1mup__/d1adl__-on-d1mup__:
  ├── intermediate/
  ├── result_PDBs/
- └── tmalign_d1adl___vs_d1mup__.txt
+ └── gdt_d1adl___vs_d1mup__.txt
 ```
 
 Contains the best intermediate alignments that were done by ICARUS
@@ -359,5 +359,5 @@ work/results/d1ggga__and_d1wdna_/d1adl__-on-d1mup__/intermediate/result_PDBs:
  ├── d1adl__-level_2_4_PUs.pdb
  ├── d1adl__-level_2_5_PUs-on-d1mup__.pdb
  ├── d1adl__-level_2_5_PUs.pdb
- └── d1adl___on_d1mup___tmalign.pdb
+ └── d1adl___on_d1mup___kpax.pdb
 ```

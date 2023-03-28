@@ -115,12 +115,12 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num
     os.remove(f"{target.name}")
     output = output.stdout.decode("utf-8")
     if save_output:
-        # For cases when we want to launch TM-align and keep the original residue numbers and chain names
+        # For cases when we want to launch KPAX and keep the original residue numbers and chain names
         if keep_ori_resnum:
-            utils.renum_ori_pdb_resnum_tmalign(ali.tmalign_result_path, ori_res_num_and_chain1, ori_res_num_and_chain2)
+            utils.renum_ori_pdb_resnum_kpax(ali.kpax_result_path, ori_res_num_and_chain1, ori_res_num_and_chain2)
         base_path = os.path.join(RESULTS_DIR, query.name + "_on_" + target.name)
         os.makedirs(base_path, exist_ok=True)
-        with open(f"{base_path}/tmalign_{query.name}_vs_{target.name}.txt", "w") as filout:
+        with open(f"{base_path}/gdt_{query.name}_vs_{target.name}.txt", "w") as filout:
             filout.write(output)
     output = output.split("\n")
     tm_scores = []

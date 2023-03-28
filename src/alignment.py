@@ -17,7 +17,7 @@ from .protein import PU
 
 # When icarus.py is executed, this equals: /path/to/icarus
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TMALIGN = os.path.join(PROJECT_DIR, "bin", "TMalign")
+KPAX = os.path.join(PROJECT_DIR, "bin", "kpax", "bin", "kpax5.1.3.x64")
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 RESULTS_DIR = os.path.join(WORK_DIR, "results")
 TMP_DIR = utils.TMP_DIR
@@ -87,7 +87,7 @@ class Alignment:
         if self.success:
             self._get_match()
             self._get_structures()
-            self.name = self.path.split("/")[-1]
+            self.name = self.path.split("/")[-2]
             self._update_target()
 
     def __repr__(self):
@@ -98,8 +98,10 @@ class Alignment:
 
     def _align(self, query, target, opt_prune):
         """
-        Align a query pdb file to a target pdb file using TM-align
-        and sets the associated TM-score normalized by the shortest sequence.
+        Align a query pdb file onto a target pdb file using KPAX
+        and set the associated TM-score normalized by the shortest sequence.
+        KPAX normalizes by the shortest sequence by default.
+        KPAX aligns the 2nd file on the 1st (which stays rigid)
 
         Args:
             - query, str: path to a query pdb file to superimpose on target file
@@ -111,70 +113,51 @@ class Alignment:
         Attributes:
             - set self.success
             - set self.path
+           
             - set self.score
         """
         ali = os.path.join(TMP_DIR, f"{query.name}-on-{target.name}")
         os.makedirs(ali, exist_ok=True)
-        alignment = f"{ali}/TM-sup"
-        # We want to normalize by the shortest protein.
-        smallest = min(query.length, target.length)
-        # Superimpose query to target with TMalign.
-        # -u option specifies the length to normalize TM_score with
-        opt = [query.path, target.path, "-u", str(smallest), "-o", alignment]
-        fasta_query = ""
-        if self.seed_alignment:
-            # Create the gapped query
-            for i, res_num in enumerate(target.residues_num):
-                if res_num in query.residues_num:
-                    # Since query == target, we can use the residue in the target sequence
-                    # as it is the same as the one in the query sequence (same residue number)
-                    fasta_query += target.seq[i]
-                else:
-                    fasta_query += "-"
-            seed_alignment_file = os.path.join(TMP_DIR, f"seed_alignment_{query.name}_{target.name}")
-            # Write the seed alignment for TM-align
-            with open(seed_alignment_file, "w") as f:
-                f.write(">" + query.name + "\n")
-                f.write(fasta_query + "\n")
-                f.write("\n")
-                f.write(">"+target.name + "\n")
-                f.write(target.seq + "\n")
-            opt += ["-I", seed_alignment_file]
-        output = subprocess.run([TMALIGN] + opt, capture_output=True)
+
+        alignment = f"{ali}/kpax_results/{target.name}_{query.name}_flex.pdb"
+        # Superimpose query to target with KPAX (1st structure is rigid and kpax aligns the 2nd onto the 1st one).
+        opt = ["-flex", "-nosubdirs", "-mask", "-conect", "-pdb", target.path, query.path]
+        output = subprocess.run([KPAX] + opt, cwd=ali, capture_output=True)
         res = output.stdout.decode("utf-8").split("\n")
         if self.save_output:
-            tmalign_result_filename = query.name + "_on_" + target.name + "_tmalign.pdb"
-            tmalign_result_path = os.path.join(RESULTS_DIR, query.name + "_on_" + target.name, "result_PDBs", tmalign_result_filename)
+            kpax_result_filename = query.name + "_on_" + target.name + "_kpax.pdb"
+            kpax_result_path = os.path.join(RESULTS_DIR, query.name + "_on_" + target.name, "result_PDBs", kpax_result_filename)
             # Create the directory because in special cases it is not yet created
-            os.makedirs(os.path.dirname(tmalign_result_path), exist_ok=True)
-            shutil.copy2(f"{alignment}_all_atm", tmalign_result_path)
-            self.tmalign_result_path = tmalign_result_path
-        to_remove = ("*pml", "*lig", "*all", "*pdb")
-        files = []
-        for files_pattern in to_remove:
-            for files in Path(ali).glob(files_pattern):
-                files.unlink()
+            os.makedirs(os.path.dirname(kpax_result_path), exist_ok=True)
+            shutil.copy2(f"{alignment}", kpax_result_path)
+            self.kpax_result_path = kpax_result_path
+        # to_remove = ("*pml", "*lig", "*all", "*pdb")
+        # files = []
+        # for files_pattern in to_remove:
+        #     for files in Path(ali).glob(files_pattern):
+        #         files.unlink()
         tm_score = None
-        err = output.stderr.decode("utf-8")
         for line in res:
             # Get TM_score normalized by user-input (shortest length)
-            tm_score_found = re.search(r"TM-score\s*=\s*(\d+\.\d+).*user-specified.*", line)
+            tm_score_found = re.search(r"^\s+1\s+\d+\.\d+\s+\d+\.\d+\s+\d+\.\d+\s+\d+\.\d+\s+(\d+\.\d+).*$", line)
             if tm_score_found:
                 tm_score = round(float(tm_score_found.group(1)), 3)
                 break
-        if "Sequence is too short" in err or tm_score is None:
+        if tm_score < opt_prune or tm_score is None:
             self.success = False
         else:
-            if tm_score < opt_prune:
-                self.success = False
-            else:
-                self.success = True
-                self.path = ali
-                self.score = tm_score
+            self.success = True
+            self.path = ali+"/kpax_results"
+            self.score = tm_score
 
-    def _get_core_matching_residues(self):
+    def _get_core_and_all_matching_residues(self):
         """
-        Get the core matching residues between the query and the target from the TM-align output.
+        Get the core matching residues between the query and the target from the KPAX output,
+        as well as all the aligned residues.
+        Also get the target sequence involved in the alignment with the PU.
+
+        Args:
+            - aa_dict (dict): dictionary of amino acids
 
         Returns:
             - core_pu_pos (list): list of the core PU matching residues in the query
@@ -183,57 +166,35 @@ class Alignment:
         """
         core_pu_pos = []
         core_target_pos = []
-        all_target_pos = []
-        regex = re.compile(r"select\s+(\d+):(.),\s*(\d+):(.)")
-        with open(f"{self.path}/TM-sup", "r") as filin:
+        target_pos = []
+        pu_pos = [] # CA only
+        target_pos = []  # CA only
+        pu_seq = ""
+        target_seq = ""
+        with open(f"{self.path}/{self.query.name}_{self.target.name}_flex.wpairs", "r") as filin:
             for line in filin:
                 line = line.strip()
-                res = regex.search(line)
-                # get the core positions
-                if res is not None:
-                    core_pu_pos.append(int(res.group(1)))
-                    core_target_pos.append(int(res.group(3)))
-                # get the residue numbers of all positions in target,
-                # not only the core ones
-                if line.startswith("ATOM") and line[21:22] == 'B':
-                    all_target_pos.append(int(line[22:26].strip()))
-        return core_pu_pos, core_target_pos, all_target_pos
-
-    def _get_all_all_aligned_residues(self, aa_dict, all_target_pos):
-        """
-        Get the list of all the aligned residues after TM-align.
-        Also get the target sequence involved int the alignment with the PU.
-
-        Args:
-            - aa_dict (dict): dictionary of amino acids
-            - all_target_pos (list): list of all the matching residues in the target
-            
-        Returns:
-            - pu_pos (list): list of the PU matching residues in the query
-            - target_pos (list): list of the matching residues in the target
-            -target_seq (str): string of the target sequence
-        """
-        pu_pos = []
-        pu_seq = []
-        target_pos = []
-        target_seq = []
-        with open(f"{self.path}/TM-sup_all_atm", 'r') as filin:
-            for line in filin:
-                if line.startswith("ATOM"):
-                    if line[21:22] == 'A':
-                        pos = int(line[22:26].strip())
-                        if (len(pu_pos) != 0 and pu_pos[-1] != pos) or len(pu_pos) == 0:
-                            pu_pos.append(pos)
-                            pu_seq += aa_dict[line[17:20].strip()]
-                    elif line[21:22] == 'B':
-                        pos = int(line[22:26].strip())
-                        # For the target chain, we want only the residues
-                        # that were involved in the TM-align with the PU
-                        if pos in all_target_pos:
-                            if (len(target_pos) != 0 and target_pos[-1] != pos) or len(target_pos) == 0:
-                                target_pos.append(pos)
-                                target_seq += aa_dict[line[17:20].strip()]
-        return pu_pos, pu_seq, target_pos, target_seq
+                if not line.startswith("#"):
+                    query, target, _ = line.split("|")
+                    # Aligned residues
+                    if "*" in line:
+                        q_chain, q_resnum, q_resname = query.strip().split(":")
+                        t_chain, t_resnum, t_resname = target.strip().split(":")
+                        core_pu_pos.append(int(q_resnum))
+                        core_target_pos.append(int(t_resnum))
+                        target_pos.append(int(t_resnum))
+                        target_seq += t_resname
+                        pu_seq += q_resname
+                        pu_pos.append(int(q_resnum))
+                    # Not aligned residues
+                    else:
+                        if query.strip() != "-":
+                            q_chain, q_resnum, q_resname = query.strip().split(":")
+                            pu_pos.append(int(q_resnum))
+                        if target.strip() != "-":
+                            t_chain, t_resnum, t_resname = target.strip().split(":")
+                            target_pos.append(int(t_resnum))
+        return core_pu_pos, core_target_pos, target_pos, pu_pos, pu_seq, target_pos, target_seq
 
     def _get_match(self):
         """
@@ -250,10 +211,9 @@ class Alignment:
                    'ILE': 'I', 'PRO': 'P', 'THR': 'T', 'PHE': 'F', 'ASN': 'N', 
                    'GLY': 'G', 'HIS': 'H', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W', 
                    'ALA': 'A', 'VAL': 'V', 'GLU': 'E', 'TYR': 'Y', 'MET': 'M'}
-        # Get the best core matching residues between query and target according to TM-align
-        core_pu_pos, core_target_pos, all_target_pos = self._get_core_matching_residues()
-        # Get all the atom coordinates of the *best* aligned residues in the query and target
-        pu_pos, pu_seq, target_pos, target_seq = self._get_all_all_aligned_residues(aa_dict, all_target_pos)      
+        # Get the best core matching residues between query and target according to KPAX
+        # and get all the atom coordinates of the *best* aligned residues in the query and target
+        core_pu_pos, core_target_pos, target_pos, pu_pos, pu_seq, target_pos, target_seq = self._get_core_and_all_matching_residues()    
         self.all_aligned = {"core_pu_aligned_positions": core_pu_pos,
                             "core_target_aligned_positions": core_target_pos,
                             "all_pu_aligned_positions": pu_pos,
@@ -264,7 +224,7 @@ class Alignment:
     def _get_structures(self):
         """
         Fetch structural conformation of PU or target that have been subject to
-        rotational translation during TM-align.
+        rotational translation during KPAX. The query stays rigid.
         Stores informations in Alignment.new_query and Alignment.new_target
         variables.
 
@@ -275,10 +235,10 @@ class Alignment:
         new_query = ""
         new_query_dict = {}
         new_target = ""
-        with open(f"{self.path}/TM-sup_all_atm", 'r') as filin:
+        with open(f"{self.path}/{self.query.name}_{self.target.name}_flex.pdb", 'r') as filin:
             for line in filin:
                 line = line.strip()
-                if line.startswith("ATOM") and line[21:22] == 'A':
+                if line.startswith("ATOM"):
                     # This is to have the PU as PDB to align
                     new_query += line[:-1] + ' ' * (81 - len(line)) + "\n"
                     # This is to have the correspondance between the residue number and its PDB line
@@ -286,7 +246,11 @@ class Alignment:
                         new_query_dict[int(line[22:26].strip())].append(line[:-1] + "\n")
                     except KeyError:
                         new_query_dict[int(line[22:26].strip())] = [line[:-1] + "\n"]
-                if line.startswith("ATOM") and line[21:22] == 'B':
+        with open(f"{self.path}/{self.target.name}_query.pdb", 'r') as filin:
+            for line in filin:
+                line = line.strip()
+                if line.startswith("ATOM"):
+                    # This is to have the PU as PDB to align
                     new_target += line[:-1] + ' ' * (81 - len(line)) + "\n"
         self.new_query = new_query
         self.new_query_dict = new_query_dict

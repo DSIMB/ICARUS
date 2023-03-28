@@ -1,0 +1,110 @@
+#!/bin/sh
+#-----------------------------------------------------------------------------
+#
+#  run_kpax: - start-up script to run kpax in a platform-independent way ...
+#
+#  D.W. Ritchie 08/06/98 (converted from csh to sh 19/01/2000)
+#
+#-----------------------------------------------------------------------------
+
+#--------------------------- select program to run ---------------------------
+
+KPAX_PROGRAM="kpax"
+KPAX_DEBUG=0
+KPAX_CUDA=0
+
+# consume any command line arguments meant for this script
+
+while true; do
+   case "$1" in
+   kpax) KPAX_PROGRAM="$1"      ; shift ;;
+   -g)      KPAX_DEBUG=1        ; shift ;;
+   -v1)    KPAX_VERSION="1e"    ; shift ;;
+   -v2)    KPAX_VERSION="2.0.10" ; shift ;;
+   -v3)    KPAX_VERSION="3.0.0" ; shift ;;
+   -v4)    KPAX_VERSION="4.0.0" ; shift ;;
+   -v5)    KPAX_VERSION="5.0.2" ; shift ;;
+  -cuda)    KPAX_CUDA=1         ; shift ;;
+  -nocuda)  KPAX_CUDA=0         ; shift ;;
+      *)   break ;;
+   esac
+done
+
+case "$1" in
+   *)                                KPAX_PROGRAM="kpax"        ;;
+esac
+
+#--------------------- get current flavour of Unix  -------------------------
+
+KPAX_OS=`uname -s`             # get current flavour of Unix
+
+case $KPAX_OS in               # ISA: instruction set architecture
+   Linux)   ISA=`uname -m`                   ;;
+   Darwin)  ISA=`uname -p`                   ;;
+   MINGW*)  ISA="exe" ;      KPAX_OS="win32"  ;;  # MinGW Windows environment
+   *)       ISA=`uname -p`                   ;;  # hope for the best
+esac
+
+#---------------------- select the apropriate executable --------------------
+
+# on SGI, use mips4 but R4xxx series needs the mip3 binary (NOT NOW)
+# on Pentium, use the i586 binary (i.e. assume Pentium II or higher)
+# otherwise, default to whatever ISA reports (suns should give ISA=sparc)
+
+case $ISA in
+   i586|i686|i786)         KPAX_ISA="i586"   ;;
+   x86_64)                 KPAX_ISA="x64"    ;;
+   *)                      KPAX_ISA="${ISA}" ;;
+esac
+
+if [ $KPAX_CUDA = 1 ]; then
+   KPAX_EXECUTABLE="${KPAX_PROGRAM}${KPAX_VERSION}-cuda.${KPAX_ISA}"
+else
+   KPAX_EXECUTABLE="${KPAX_PROGRAM}${KPAX_VERSION}.${KPAX_ISA}"
+fi
+
+#-------------- kpax may need to know which "OS" we're using -----------------
+
+export KPAX_VERSION
+export KPAX_ISA
+
+#---------------------- echo full pathname of executable --------------------
+
+KPAX_PATH_NAME="${KPAX_ROOT}/bin/${KPAX_EXECUTABLE}"
+
+if [ ! -f "${KPAX_PATH_NAME}" ]; then
+
+   echo "Program file not found: ${KPAX_PATH_NAME}"
+   echo "Please check that:"
+   echo "  a) You are logged in to a machine that can run kpax"
+   echo "  b) kpax has been installed correctly"
+   echo "  c) The version that you requested actually exists (KPAX_VERSION=${KPAX_VERSION})"
+   echo "Usage:"
+   echo "   kpax -v1e   (latest version)"
+   exit 1
+fi
+
+#----------------------------- run the program ------------------------------
+
+case $KPAX_OS in
+   win32) export KPAX_ROOT="${KPAX_ROOT}"  
+            ;;
+   Linux) ulimit -c          0
+            ;;
+esac
+
+if [ $KPAX_DEBUG = 1 ]; then
+   case $KPAX_OS in
+      Linux)  gdb "${KPAX_PATH_NAME}" $* ;;
+      win32)  gdb "${KPAX_PATH_NAME}" $* ;;
+      Darwin) gdb "${KPAX_PATH_NAME}" $* ;;
+      *)      dbx "${KPAX_PATH_NAME}" $* ;;
+   esac
+else
+   case $KPAX_OS in
+      win32)      "${KPAX_PATH_NAME}" $* ;;
+      *)     exec "${KPAX_PATH_NAME}" $* ;;
+   esac
+fi
+
+#----------------------- done: never normally get here ----------------------
