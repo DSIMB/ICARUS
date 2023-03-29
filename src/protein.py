@@ -9,8 +9,12 @@ import subprocess
 import sys
 import signal
 import numpy as np
+import warnings
 from collections import OrderedDict
-from prody import *
+from Bio import BiopythonDeprecationWarning
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", BiopythonDeprecationWarning)
+    from prody import *
 confProDy(verbosity='none')
 
 import src.utils as utils
