@@ -161,7 +161,7 @@ class Protein:
         # Build sublist of PUs for each segmentation level
         for pdb in sorted_pdbs:
             # first number encountered is the segmentation level
-            search = re.search(r"_(\d+)_\d+_\d+", pdb)
+            search = re.search(r"_(\d+)_\d+_\d+.pdb", pdb)
             seg_levels.append(int(search.group(1)))
         for level in set(seg_levels):
             # add empty sub list for each segmentation level
