@@ -4,7 +4,6 @@ This module implements the GraphPU class.
 
 import multiprocessing
 import os
-import re
 import shlex
 import shutil
 import signal
