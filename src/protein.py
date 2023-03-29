@@ -23,19 +23,6 @@ PDB_CLEAN_DIR = os.path.join(WORK_DIR, "PDBs_Clean")
 PDB_STAND_DIR = os.path.join(WORK_DIR, "PDBs_Stand")
 TMP_DIR = utils.TMP_DIR
 
-def signal_handler(signal, handler):
-    """
-    Catch CTRL+C signal
-    Clean the tmp directory before stopping
-    """
-    if os.path.exists(TMP_DIR):
-        shutil.rmtree(TMP_DIR, ignore_errors=True)
-        print("\nQuitting gracefully, bye !")
-    sys.exit(0)
-
-# Catch CTRL+C signal and quit gracefully by cleaning traces
-signal.signal(signal.SIGINT, signal_handler)
-
 class Protein:
     """
     Used to manage data related to a protein. Initialized by giving the path to

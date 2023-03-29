@@ -55,6 +55,9 @@ def signal_handler(signal, handler):
         print("\nQuitting gracefully, bye !")
     sys.exit(0)
 
+# Catch CTRL+C signal and quit gracefully by cleaning traces
+signal.signal(signal.SIGINT, signal_handler)
+
 # Custom objects know their class.
 # Function objects seem to know way too much, including modules.
 # Exclude modules as well.

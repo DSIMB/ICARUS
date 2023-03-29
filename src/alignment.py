@@ -22,18 +22,6 @@ WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 RESULTS_DIR = os.path.join(WORK_DIR, "results")
 TMP_DIR = utils.TMP_DIR
 
-def signal_handler(signal, handler):
-    """
-    Catch CTRL+C signal
-    Clean the tmp directory before stopping
-    """
-    if os.path.exists(TMP_DIR):
-        shutil.rmtree(TMP_DIR, ignore_errors=True)
-        print("\nQuitting gracefully, bye !")
-    sys.exit(0)
-
-# Catch CTRL+C signal and quit gracefully by cleaning traces
-signal.signal(signal.SIGINT, signal_handler)
 class Alignment:
     """
     The purpose of this class in storing paths and informations relative to an
