@@ -169,6 +169,8 @@ def reformat_struct(path, ori_res_num_and_chain, chain, new_path=""):
                 atm_name = line[12:16].strip()
                 res_name = line[17:20].strip()
                 chain_name = line[21:22].strip()
+                if chain_name == "":
+                    chain_name = "A" 
                 alter_pos = line[16:17]
                 if (alter_pos == " " or alter_pos == "A") and chain_name == chain:
                     try:
