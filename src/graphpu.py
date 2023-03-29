@@ -68,8 +68,8 @@ class GraphPU:
             - ori_res_num_and_chain_query (dict): Mapping of the original residue number and chain(s) of the query to the new numerotation and chain.
             - ori_res_num_and_chain_target (dict): Mapping of the original residue number and chain(s) of the target to the new numerotation and chain.
             - nb_cpu (int): Number of CPUs to use for multiprocessing
-            - opt_prune (float): TM-score threshold to prune TM-align alignments of PUs
-            - seed_alignment (bool): If True, the TM-align alignments are seeded with a
+            - opt_prune (float): TM-score threshold to prune KPAX alignments of PUs
+            - seed_alignment (bool): If True, the KPAX alignments are seeded with a
                                         fixed alignment (used when query and target are the same)
             - smoothed_pu_output (bool): If True, the PUs are trimmed/smoothed for the final textual alignment only
             - sequential (bool): If True, do a sequential alignment: keep paths with consecutive PUs only
@@ -560,7 +560,7 @@ class GraphPU:
         IT SLOWS DOWN MULTIPROCESSING BY A LOT !
 
         Merge multiple alignments into a single pdb file. Parts merged are taken
-        from the outputs of TM-align ie query protein that were subject to
+        from the outputs of KPAX ie query protein that were subject to
         transformation.
 
         Args:
@@ -633,7 +633,7 @@ class GraphPU:
             mode = 1
         else:
             mode = 0
-        # TM-align before calculating the scores with gdt2.pl
+        # KPAX before calculating the scores with gdt2.pl
         ali = Alignment(query, target, opt_prune, seed_alignment)
         if ali.success:
             path_query_name = f"{TMP_DIR}/{query.name}"

@@ -317,9 +317,9 @@ work/results/d1adl___and_d1mup__:
  └── summary.txt
 ```
 
-Contains all intermediate alignments with TM-align outputs,
+Contains all intermediate alignments with KPAX outputs,
 the ICARUS final result PDB and the simple protein1 vs. protein2
-TM-align output for information.
+KPAX output for information.
 ```
 work/results/d1adl___and_d1mup__/d1adl__-on-d1mup__:
  ├── intermediate/
@@ -337,7 +337,7 @@ work/results/d1adl___and_d1mup__/d1adl__-on-d1mup__/intermediate:
 ```
 
 Each directory contains the TM-sup and TM-sup_all_atm output PDB files of
-the best TM-aligns done between best alignment PUs and the target to which
+the best KPAXs done between best alignment PUs and the target to which
 previously aligned portions of PUs were removed.
 ```
 work/results/d1ggga__and_d1wdna_/d1adl__-on-d1mup__/intermediate/alignements_level_1_3_PUs:

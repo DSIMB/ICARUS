@@ -92,9 +92,9 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num
         - target (Protein or PU): target structure used as an input for gdt.pl.
         - min_len_p1_p2 (int): minimum length of the query and target sequences.
         - opt_prune (int): optional pruning by TM-score threshold.
-        - seed_alignment (bool): if True, seed alignment is used to fix the TM-align
+        - seed_alignment (bool): if True, seed alignment is used to fix the KPAX
         - save_output (bool): if True, gdt2.pl output is saved in a file.
-        - keep_ori_resnum (bool): if True, original residue numbers are kept in the TM-align PDB output.
+        - keep_ori_resnum (bool): if True, original residue numbers are kept in the KPAX PDB output.
 
     Returns:
         - score (float): TM-score normalized by length of shortest structure.
@@ -103,7 +103,7 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num
         mode = 1
     else:
         mode = 0
-    # TM-align before calculating the scores with gdt2.pl
+    # KPAX before calculating the scores with gdt2.pl
     # use the original query and target residues numbers
     ali = Alignment(query, target, opt_prune, seed_alignment, save_output, keep_ori_resnum)
     with open(query.name, "w") as filout:
@@ -168,7 +168,7 @@ def main(p1,
                                       for the protein 2 because the original exploration level
                                       was not adapted (too high)
         - opt_prune (int): optional pruning by TM-score threshold.
-        - seed_alignment (bool): if True, seed alignment is used to fix the TM-align
+        - seed_alignment (bool): if True, seed alignment is used to fix the KPAX
         - smoothed_pu_output (bool): if True, the output of the PU is smoothed
         - ori_res_num_and_chain1 (dict): original number of residues and chain(s) of protein 1
         - ori_res_num_and_chain2 (dict): original number of residues and chain(s) of protein 2
@@ -211,12 +211,12 @@ def main(p1,
     results.append("                                                    ======\n")
     results.append(f" *  {p1.name} against {p2.name}")
     print(f"\n\nAligning {p1.name} against {p2.name}", end="")
-    if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, we only do a TM-align
-        results.append(f" └── level 0 | 0 PUs (plain TM-align): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
+    if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, we only do a KPAX
+        results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
         textual_alignment_p1_vs_p2 = ""
         print("\n")
     else:
-        results.append(f" ├── level 0 | 0 PUs (plain TM-align): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
+        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
         for level in range(g.GraphPU.max_seg_level_p1):
             nb_pu_at_level = len(p1.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
@@ -256,11 +256,11 @@ def main(p1,
     results.append("                                                    SCORES")
     results.append("                                                    ======\n")
     results.append(f" *  {p2.name} against {p1.name}")
-    if exploration_level_p2 == 0:  # Peeling coudn't find any PU on the protein, we only do a TM-align
-        results.append(f" └── level 0 | 0 PUs (plain TM-align): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
+    if exploration_level_p2 == 0:  # Peeling coudn't find any PU on the protein, we only do a KPAX
+        results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
         textual_alignment_p2_vs_p1 = ""
     else:
-        results.append(f" ├── level 0 | 0 PUs (plain TM-align): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
+        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
         for level in range(g.GraphPU.max_seg_level_p2):
             nb_pu_at_level = len(p2.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
@@ -317,7 +317,7 @@ def main(p1,
         print("\n\n\033[93mVERBOSE MODE: show all intermediate exploration levels scores and best alignments for P1 vs P2 and P2 vs P1\033[0m")
         print("              \033[93mBest overall results are shown at the end.\033[0m\n")
         print("\n".join(results))
-        # Saving output of simple TM-align alignment
+        # Saving output of simple KPAX alignment
         run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=True, keep_ori_resnum=True)
         run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, save_output=True, keep_ori_resnum=True)
         dest1 = os.path.join(base_path, f"{p1.name}_on_{p2.name}")
@@ -1135,7 +1135,7 @@ def set_exploration_limits(prot, nb_pus_requested, exploration_level):
     max_seg_level = None
     if len(prot.PUs_per_level) == 0:
         print(f"\n* {prot.name}")
-        print(f"   - Protein Peeling program could not find any PU in {prot.name}. ICARUS will only perform a simple TM-align when {prot.name} is used as the query")
+        print(f"   - Protein Peeling program could not find any PU in {prot.name}. ICARUS will only perform a simple KPAX when {prot.name} is used as the query")
         max_seg_level = 0
         exploration_level = 0
     else:
@@ -1404,7 +1404,7 @@ def parse_arguments():
         "--prune",
         help=textwrap.dedent('''\
                             The pruning threshold corresponds to a TM-score value
-                            used to filter the TM-align between Protein Units and the target protein.
+                            used to filter the KPAX between Protein Units and the target protein.
                             If an alignment is below this threshold, it will be pruned from the graph.
                             A high pruning threshold (TM-score value) will filter out more solutions
                             whereas a low one will prune less solutions.
@@ -1418,7 +1418,7 @@ def parse_arguments():
         help=textwrap.dedent('''\
                             In the case when both input PDBs have identical amino acid sequences
                             but differ in 3D, setting this option will make sure that
-                            all alignments by TM-align will be assigned to avoid any displacement.
+                            all alignments by KPAX will be assigned to avoid any displacement.
                             This is useful for instance in the case of an analysis of structures inside a
                             dynamics simulations. Default is not set'''),
         action="store_true",
@@ -1428,7 +1428,7 @@ def parse_arguments():
         "--no-seed-alignment",
         help=textwrap.dedent('''\
                             Force the flexible alignment of identical amino acid sequences 
-                            without setting a seed alignment for TM-align. Default is not set'''),
+                            without setting a seed alignment for KPAX. Default is not set'''),
         action="store_true",
         default=False)
     optional.add_argument(

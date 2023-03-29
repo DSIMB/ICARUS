@@ -25,7 +25,7 @@ TMP_DIR = utils.TMP_DIR
 class Alignment:
     """
     The purpose of this class in storing paths and informations relative to an
-    alignment realised with the TM-align program.
+    alignment realised with the KPAX program.
     """
 
     def __init__(self, query, target, opt_prune, seed_alignment, save_output=False, keep_ori_resnum=False):
@@ -36,14 +36,14 @@ class Alignment:
             - query (Protein or PU): The query protein or PU to align to the target protein
             - target (Protein or PU): The target protein on which the query will be aligned
             - opt_prune (float): TM-score threshold to prune the alignment
-            - seed_alignment (bool): if True, the TM-align alignments will be fixed with a seed alignment
-            - save_output (bool): if True, the TM-align output PDB will be saved in the icarus_output folder
+            - seed_alignment (bool): if True, the KPAX alignments will be fixed with a seed alignment
+            - save_output (bool): if True, the KPAX output PDB will be saved in the icarus_output folder
 
         Attributes:
             - query (Protein or PU): passed query
             - target (Protein or PU): passed target
             - opt_prune (float): TM-score threshold to prune the alignment
-            - seed_alignment (bool): if True, the TM-align alignments will be fixed with a seed alignment
+            - seed_alignment (bool): if True, the KPAX alignments will be fixed with a seed alignment
             - path (str): path to the generated alignement folder
             - score (float): TM-score associated with the alignment
             - success (bool): True if the alignment was successful
