@@ -107,7 +107,7 @@ class Alignment:
         ali = os.path.join(TMP_DIR, f"{query.name}-on-{target.name}")
         os.makedirs(ali, exist_ok=True)
 
-        alignment = f"{ali}/kpax_results/{target.name}_{query.name}_flex.pdb"
+        alignment = f"{ali}/kpax_results/{query.name}_{target.name}_flex.pdb"
         # Superimpose query to target with KPAX (1st structure is rigid and kpax aligns the 2nd onto the 1st one).
         opt = ["-flex", "-nosubdirs", "-nohex", "-novmd", "-nojmol", "-nomatrix",
                "-nosse", "-nofasta", "-nopir", "-nokrmsd", "-noprofit", "-nohits",
