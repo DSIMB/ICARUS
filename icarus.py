@@ -81,7 +81,7 @@ def getsize(obj):
     return size
 
 
-def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=False, keep_ori_resnum=False):
+def run_gdt(query, target, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=False, keep_ori_resnum=False):
     """
     Runs gdt2.pl with input query and target files.
     As gdt requires file to be in current folder, files are copied in
@@ -92,20 +92,16 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num
         - target (Protein or PU): target structure used as an input for gdt.pl.
         - min_len_p1_p2 (int): minimum length of the query and target sequences.
         - opt_prune (int): optional pruning by TM-score threshold.
-        - seed_alignment (bool): if True, seed alignment is used to fix the KPAX
         - save_output (bool): if True, gdt2.pl output is saved in a file.
         - keep_ori_resnum (bool): if True, original residue numbers are kept in the KPAX PDB output.
 
     Returns:
         - score (float): TM-score normalized by length of shortest structure.
     """
-    if seed_alignment:
-        mode = 1
-    else:
-        mode = 0
+    mode = 0
     # KPAX before calculating the scores with gdt2.pl
     # use the original query and target residues numbers
-    ali = Alignment(query, target, opt_prune, seed_alignment, save_output, keep_ori_resnum)
+    ali = Alignment(query, target, opt_prune, save_output, keep_ori_resnum)
     with open(query.name, "w") as filout:
         filout.write(ali.new_query)
     with open(target.name, "w") as filout:
@@ -144,7 +140,6 @@ def main(p1,
          exploration_level_p1,
          exploration_level_p2,
          opt_prune,
-         seed_alignment,
          smoothed_pu_output,
          ori_res_num_and_chain1,
          ori_res_num_and_chain2,
@@ -168,7 +163,6 @@ def main(p1,
                                       for the protein 2 because the original exploration level
                                       was not adapted (too high)
         - opt_prune (int): optional pruning by TM-score threshold.
-        - seed_alignment (bool): if True, seed alignment is used to fix the KPAX
         - smoothed_pu_output (bool): if True, the output of the PU is smoothed
         - ori_res_num_and_chain1 (dict): original number of residues and chain(s) of protein 1
         - ori_res_num_and_chain2 (dict): original number of residues and chain(s) of protein 2
@@ -212,17 +206,17 @@ def main(p1,
     results.append(f" *  {p1.name} against {p2.name}")
     print(f"\n\nAligning {p1.name} against {p2.name}", end="")
     if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, we only do a KPAX
-        results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
+        results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
         textual_alignment_p1_vs_p2 = ""
         print("\n")
     else:
-        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
+        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
         for level in range(g.GraphPU.max_seg_level_p1):
             nb_pu_at_level = len(p1.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
             print(f"\n\nSOLUTION {solutions_cnt}: {p1.name} [level {expl_level} => {nb_pu_at_level} PUs] vs {p2.name}")
             print(f"{56*'-'}")  # for aesthetic purposes
-            graph = g.GraphPU(p1, p2, level + 1, expl_level, min_len_p1_p2, ori_res_num_and_chain1, ori_res_num_and_chain2, nb_cpu, opt_prune, seed_alignment, smoothed_pu_output, sequential)
+            graph = g.GraphPU(p1, p2, level + 1, expl_level, min_len_p1_p2, ori_res_num_and_chain1, ori_res_num_and_chain2, nb_cpu, opt_prune, smoothed_pu_output, sequential)
             if graph.succeeded:
                 scores.append([graph.best_score, graph.pu_order_text, graph.best_ali, "1"])
                 # aesthetics: last line to write
@@ -257,16 +251,16 @@ def main(p1,
     results.append("                                                    ======\n")
     results.append(f" *  {p2.name} against {p1.name}")
     if exploration_level_p2 == 0:  # Peeling coudn't find any PU on the protein, we only do a KPAX
-        results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
+        results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
         textual_alignment_p2_vs_p1 = ""
     else:
-        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
+        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
         for level in range(g.GraphPU.max_seg_level_p2):
             nb_pu_at_level = len(p2.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
             print(f"\n\nSOLUTION {solutions_cnt}: {p2.name} [level {expl_level} => {nb_pu_at_level} PUs] vs {p1.name}")
             print(f"{56*'-'}")  # for aesthetic purposes
-            graph = g.GraphPU(p2, p1, level + 1, expl_level, min_len_p1_p2, ori_res_num_and_chain2, ori_res_num_and_chain1, nb_cpu, opt_prune, seed_alignment, smoothed_pu_output, sequential)
+            graph = g.GraphPU(p2, p1, level + 1, expl_level, min_len_p1_p2, ori_res_num_and_chain2, ori_res_num_and_chain1, nb_cpu, opt_prune, smoothed_pu_output, sequential)
             if graph.succeeded:
                 scores.append([graph.best_score, graph.pu_order_text, graph.best_ali, "2"])
                 # aesthetics: last line to write
@@ -318,8 +312,8 @@ def main(p1,
         print("              \033[93mBest overall results are shown at the end.\033[0m\n")
         print("\n".join(results))
         # Saving output of simple KPAX alignment
-        run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=True, keep_ori_resnum=True)
-        run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, save_output=True, keep_ori_resnum=True)
+        run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=True, keep_ori_resnum=True)
+        run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, save_output=True, keep_ori_resnum=True)
         dest1 = os.path.join(base_path, f"{p1.name}_on_{p2.name}")
         dest2 = os.path.join(base_path, f"{p2.name}_on_{p1.name}")
         if os.path.exists(dest1):
@@ -1412,25 +1406,6 @@ def parse_arguments():
         default=0.0,
         type=check_prune)
     group = optional.add_mutually_exclusive_group()
-    group.add_argument(
-        "-s",
-        "--seed-alignment",
-        help=textwrap.dedent('''\
-                            In the case when both input PDBs have identical amino acid sequences
-                            but differ in 3D, setting this option will make sure that
-                            all alignments by KPAX will be assigned to avoid any displacement.
-                            This is useful for instance in the case of an analysis of structures inside a
-                            dynamics simulations. Default is not set'''),
-        action="store_true",
-        default=False)
-    group.add_argument(
-        "-n",
-        "--no-seed-alignment",
-        help=textwrap.dedent('''\
-                            Force the flexible alignment of identical amino acid sequences 
-                            without setting a seed alignment for KPAX. Default is not set'''),
-        action="store_true",
-        default=False)
     optional.add_argument(
         "-t",
         "--smoothed-pu-output",
@@ -1485,8 +1460,6 @@ if __name__ == "__main__":
     nb_cpu = args.cpu
     chain1 = args.chain1
     chain2 = args.chain2
-    seed_alignment = args.seed_alignment
-    no_seed_alignment = args.no_seed_alignment
     smoothed_pu_output = args.smoothed_pu_output
     sequential = args.sequential
     # Default is 0 -> use all cores
@@ -1514,17 +1487,6 @@ if __name__ == "__main__":
     exploration_level_p1 = None
     exploration_level_p2 = None
 
-    # Use seed alignment only in case of identical sequences
-    if seed_alignment and p1.seq != p2.seq:
-        sys.exit("Error: The seed alignment option is only possible when both input PDBs have identical sequences\n\
-                Otherwise we cannot build the seed alignment as the residues of the query won't match the residues of the target")
-    if not seed_alignment and not no_seed_alignment and p1.seq == p2.seq:
-        print("\nINFO: The seed alignment option is not set.\nHowever, both input sequences have identical amino acid sequences.")
-        print("This may result in a less qualitative alignment.\nFor this job we set --seed-alignment.\nTo force without seed-alignment please set --no-seed-alignment")
-        seed_alignment = True
-    elif not seed_alignment and no_seed_alignment and p1.seq == p2.seq:
-        print("\nForcing no seed alignment even though input sequences are identical. (This may result in poorer alignment).")
-
     # Set limits for Protein 1
     exploration_level_p1, g.GraphPU.max_seg_level_p1 = set_exploration_limits(p1, nb_pus_requested, args.exploration_level)
 
@@ -1535,7 +1497,7 @@ if __name__ == "__main__":
 
     main(p1, p2, min_len_p1_p2, exploration_level,
         exploration_level_p1, exploration_level_p2,
-        opt_prune, seed_alignment, smoothed_pu_output,
+        opt_prune, smoothed_pu_output,
         ori_res_num_and_chain1, ori_res_num_and_chain2, sequential, nb_cpu, verbose)
 
     # Add program runtime to terminal output and summary.txt

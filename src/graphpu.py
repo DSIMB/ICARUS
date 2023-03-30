@@ -49,7 +49,6 @@ class GraphPU:
                  ori_res_num_and_chain_target,
                  nb_cpu,
                  opt_prune,
-                 seed_alignment,
                  smoothed_pu_output,
                  sequential):
         """
@@ -69,14 +68,12 @@ class GraphPU:
             - ori_res_num_and_chain_target (dict): Mapping of the original residue number and chain(s) of the target to the new numerotation and chain.
             - nb_cpu (int): Number of CPUs to use for multiprocessing
             - opt_prune (float): TM-score threshold to prune KPAX alignments of PUs
-            - seed_alignment (bool): If True, the KPAX alignments are seeded with a
-                                        fixed alignment (used when query and target are the same)
             - smoothed_pu_output (bool): If True, the PUs are trimmed/smoothed for the final textual alignment only
             - sequential (bool): If True, do a sequential alignment: keep paths with consecutive PUs only
         """
 
         __slots__ = ("query", "target", "seg_level", "expl_level", 
-                    "min_len_p1_p2", "nb_cpu", "opt_prune", "seed_alignment"
+                    "min_len_p1_p2", "nb_cpu", "opt_prune",
                     "best_ali", "best_score", "final_alis", "best_path", 
                     "best_gdt2_output", "best_pu_order", "pu_order_text",
                     "pu_range", "all_alis", "query", "target", "seg_level",
@@ -100,7 +97,6 @@ class GraphPU:
         self.ori_res_num_and_chain_target = ori_res_num_and_chain_target
         self.best_ori_query_renum_pdb = None
         self.opt_prune = opt_prune
-        self.seed_alignment = seed_alignment
         self.smoothed_pu_output = smoothed_pu_output
         self.sequential = sequential
         self.succeeded = False
@@ -112,7 +108,7 @@ class GraphPU:
         # Edges represents performed alignments, stored in attribute ali
         self.graph = nx.DiGraph()
         # First set of alignments
-        self.alis = Alignment.multiple_alignment(query, target, opt_prune, seed_alignment, seg_level)
+        self.alis = Alignment.multiple_alignment(query, target, opt_prune, seg_level)
         # Number of nodes to create
         # key=nb of PUs values=nb of nodes to create accordingly
         self.edges_todo_all_d = {
@@ -128,7 +124,7 @@ class GraphPU:
         }
         self.build_graph(nb_cpu)
         self.merge_all(nb_cpu)
-        succeeded = self.compute_scores(min_len_p1_p2, nb_cpu, opt_prune, seed_alignment)
+        succeeded = self.compute_scores(min_len_p1_p2, nb_cpu, opt_prune)
         if succeeded:
             # Smooth the positions of the PUs in the best alignments to be able to print them correctly
             # Remove PU positions that are isolated:
@@ -608,7 +604,7 @@ class GraphPU:
             paths.append((merged_pus_path, merged_pus_path_renum, alignments))
         return True
 
-    def run_gdt2(scores, min_len_p1_p2, opt_prune, seed_alignment, target, query):
+    def run_gdt2(scores, min_len_p1_p2, opt_prune, target, query):
         """
         DO NOT PUT "self" TO THIS FUNCTION,
         IT SLOWS DOWN MULTIPROCESSING BY A LOT !
@@ -627,14 +623,9 @@ class GraphPU:
             - score, float:
                 TM-score normalized by length of shortest structure.
         """
-        # Case when query and target have identical amino acid sequences
-        # We need to treat the gdt alignment differently in this case
-        if seed_alignment:
-            mode = 1
-        else:
-            mode = 0
+        mode = 0
         # KPAX before calculating the scores with gdt2.pl
-        ali = Alignment(query, target, opt_prune, seed_alignment)
+        ali = Alignment(query, target, opt_prune)
         if ali.success:
             path_query_name = f"{TMP_DIR}/{query.name}"
             with open(path_query_name, "w") as filout:
@@ -658,7 +649,7 @@ class GraphPU:
                     break
             return True
 
-    def compute_scores(self, min_len_p1_p2, nb_cpu, opt_prune, seed_alignment):
+    def compute_scores(self, min_len_p1_p2, nb_cpu, opt_prune):
         """
         Computes all scores using the run_gdt2 function, select best alignment
         and its score and stores it in self.
@@ -667,7 +658,6 @@ class GraphPU:
             - min_len_p1_p2 (int): minimum length of the two proteins
             - nb_cpu (int): number of cpu to use
             - opt_prune (float): threshold for pruning
-            - seed_alignment (bool): if True, use a seed alignment
 
         Returns:
             - succeeded (bool): True if computation was successful, False otherwise
@@ -688,7 +678,7 @@ class GraphPU:
             chunksize = self.calc_chunksize(nb_cpu, nb_prots)
             with multiprocessing.Pool(processes=nb_cpu, initializer=signal.signal, initargs=(signal.SIGINT, signal.SIG_IGN)) as p:
                 try:
-                    func = partial(GraphPU.run_gdt2, scores, min_len_p1_p2, opt_prune, seed_alignment, self.target)
+                    func = partial(GraphPU.run_gdt2, scores, min_len_p1_p2, opt_prune, self.target)
                     for i, _ in enumerate(p.imap_unordered(func, prots, chunksize)):
                         self.progressbar(i + 1, nb_prots, "Compute scores")
                     p.close()

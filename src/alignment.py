@@ -28,7 +28,7 @@ class Alignment:
     alignment realised with the KPAX program.
     """
 
-    def __init__(self, query, target, opt_prune, seed_alignment, save_output=False, keep_ori_resnum=False):
+    def __init__(self, query, target, opt_prune, save_output=False, keep_ori_resnum=False):
         """
         alignment instance creator
 
@@ -36,14 +36,12 @@ class Alignment:
             - query (Protein or PU): The query protein or PU to align to the target protein
             - target (Protein or PU): The target protein on which the query will be aligned
             - opt_prune (float): TM-score threshold to prune the alignment
-            - seed_alignment (bool): if True, the KPAX alignments will be fixed with a seed alignment
             - save_output (bool): if True, the KPAX output PDB will be saved in the icarus_output folder
 
         Attributes:
             - query (Protein or PU): passed query
             - target (Protein or PU): passed target
             - opt_prune (float): TM-score threshold to prune the alignment
-            - seed_alignment (bool): if True, the KPAX alignments will be fixed with a seed alignment
             - path (str): path to the generated alignement folder
             - score (float): TM-score associated with the alignment
             - success (bool): True if the alignment was successful
@@ -60,7 +58,6 @@ class Alignment:
         self.query = query
         self.target = target
         self.opt_prune = opt_prune
-        self.seed_alignment = seed_alignment
         self.success = None
         self.path = None  # initialized by _align
         self.score = None  # initialized by _align
@@ -289,7 +286,7 @@ class Alignment:
         new_target = PU(self.updated_target)
         del new_alis[id_pu]  # remove aligned PU
         for i, ali in new_alis.items():
-            new_alis[i] = Alignment(ali.query, new_target, self.opt_prune, self.seed_alignment)
+            new_alis[i] = Alignment(ali.query, new_target, self.opt_prune)
         return new_alis
         
     def smooth_positions(self, min_contiguous=5, n_gaps=2):
@@ -420,7 +417,7 @@ class Alignment:
         return self.all_aligned["smoothed_core_target_aligned_positions"]
 
     @staticmethod
-    def multiple_alignment(query_prot, target_prot, opt_prune, seed_alignment, seg_level=0):
+    def multiple_alignment(query_prot, target_prot, opt_prune, seg_level=0):
         """
         Align each PU from the query_prot Protein object to the target_prot protein.
         PUs from the segmentation level seg_level are align, default 0.
@@ -436,9 +433,9 @@ class Alignment:
             print("Error: Requested segmentation level isn't available")
             return None
         if seg_level == 0:
-            return Alignment(query_prot, target_prot, opt_prune, seed_alignment)  # full_length alignment
+            return Alignment(query_prot, target_prot, opt_prune)  # full_length alignment
 
         alis = {}
         for id_pu, pu in query_prot.PUs_per_level[seg_level - 1].items():
-            alis[id_pu] = Alignment(pu, target_prot, opt_prune, seed_alignment)
+            alis[id_pu] = Alignment(pu, target_prot, opt_prune)
         return alis
