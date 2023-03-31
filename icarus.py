@@ -81,6 +81,26 @@ def getsize(obj):
     return size
 
 
+def print_runtime(p1, p2, start_time, verbose, level=None):
+    """
+    Add program runtime to terminal output and summary.txt
+    """
+    runtime = time.time() - start_time
+    base_path = os.path.join(RESULTS_DIR, p1.name + "_and_" + p2.name, "summary.txt")
+    if not os.path.exists(base_path):
+        os.makedirs(os.path.dirname(base_path))
+    if verbose:
+        if level is not None:
+            print(f"\n\nLevel {level} runtime: {runtime:.1f} seconds")
+        else:
+            print(f"Total runtime: {runtime:.1f} seconds")
+    with open(base_path, "a") as f_out:
+        if level is not None:
+            f_out.write(f"\n\nLevel {level} runtime: {runtime:.1f} seconds")
+        else:
+            f_out.write(f"Total runtime: {runtime:.1f} seconds")
+
+
 def run_gdt(query, target, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=False, keep_ori_resnum=False):
     """
     Runs gdt2.pl with input query and target files.
@@ -110,8 +130,10 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori
     cmd_args = shlex.split(command)
     # execution of gdt2.pl
     output = subprocess.run(cmd_args, capture_output=True, check=True)
-    os.remove(f"{query.name}")
-    os.remove(f"{target.name}")
+    if os.path.exists(query.name):
+        os.remove(f"{query.name}")
+    if os.path.exists(target.name):
+        os.remove(f"{target.name}")
     output = output.stdout.decode("utf-8")
     if save_output:
         # For cases when we want to launch KPAX and keep the original residue numbers and chain names
@@ -206,11 +228,14 @@ def main(p1,
     results.append(f" *  {p1.name} against {p2.name}")
     print(f"\n\nAligning {p1.name} against {p2.name}", end="")
     if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, we only do a KPAX
+        start_t = time.time()
         results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
         textual_alignment_p1_vs_p2 = ""
+        print_runtime(p1, p2, start_t, verbose, "0")
         print("\n")
     else:
         results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
+        start_t = time.time()
         for level in range(g.GraphPU.max_seg_level_p1):
             nb_pu_at_level = len(p1.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
@@ -225,6 +250,7 @@ def main(p1,
                 else:
                     results.append(f" ├── level {expl_level} | {nb_pu_at_level} PUs: {graph.best_score}")
             solutions_cnt += 1
+            print_runtime(p1, p2, start_t, verbose, expl_level)
         if graph.succeeded:
             textual_alignment_p1_vs_p2 = draw_textual_alignment(p1, p2, graph, ori_res_num_and_chain1, smoothed_pu_output)
             results.append(textual_alignment_p1_vs_p2)
@@ -251,10 +277,13 @@ def main(p1,
     results.append("                                                    ======\n")
     results.append(f" *  {p2.name} against {p1.name}")
     if exploration_level_p2 == 0:  # Peeling coudn't find any PU on the protein, we only do a KPAX
+        start_t = time.time()
         results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
         textual_alignment_p2_vs_p1 = ""
+        print_runtime(p1, p2, start_t, verbose, "0")
     else:
         results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
+        start_t = time.time()
         for level in range(g.GraphPU.max_seg_level_p2):
             nb_pu_at_level = len(p2.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
@@ -269,6 +298,7 @@ def main(p1,
                 else:
                     results.append(f" ├── level {expl_level} | {nb_pu_at_level} PUs: {graph.best_score}")
             solutions_cnt += 1
+            print_runtime(p1, p2, start_t, verbose, expl_level)
         if graph.succeeded:
             textual_alignment_p2_vs_p1 = draw_textual_alignment(p2, p1, graph, ori_res_num_and_chain2, smoothed_pu_output)
             results.append(textual_alignment_p2_vs_p1)
@@ -322,8 +352,10 @@ def main(p1,
         if os.path.exists(dest2):
             print(f"INFO: Overwriting {p2.name} vs. {p1.name} results\n")
             shutil.rmtree(dest2)
-        shutil.move(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}", dest1)
-        shutil.move(f"{RESULTS_DIR}/{p2.name}_on_{p1.name}", dest2)
+        if os.path.exists(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}"):
+            shutil.move(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}", dest1)
+        if os.path.exists(f"{RESULTS_DIR}/{p2.name}_on_{p1.name}"):
+            shutil.move(f"{RESULTS_DIR}/{p2.name}_on_{p1.name}", dest2)
         print("\n\n\n\n\n\t\tGLOBAL BEST\n\n"+best)
         with open(f"{base_path}/summary.txt", "w") as filin:
             filin.write("\n".join(results))
@@ -1500,10 +1532,5 @@ if __name__ == "__main__":
         opt_prune, smoothed_pu_output,
         ori_res_num_and_chain1, ori_res_num_and_chain2, sequential, nb_cpu, verbose)
 
-    # Add program runtime to terminal output and summary.txt
-    base_path = os.path.join(RESULTS_DIR, p1.name + "_and_" + p2.name, "summary.txt")
-    runtime = time.time() - start_time
-    print("Total runtime: {:.1f} seconds".format(runtime))
-    with open(base_path, "a") as f_out:
-        f_out.write("Total runtime: {:.1f} seconds".format(runtime))
+    print_runtime(p1, p2, start_time, verbose)
     utils.clean()
