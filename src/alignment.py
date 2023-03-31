@@ -167,10 +167,10 @@ class Alignment:
                     if star.strip() == "*":
                         q_chain, q_resnum, q_resname = query.strip().split(":")
                         t_chain, t_resnum, t_resname = target.strip().split(":")
-                        core_pu_pos.append(int(q_resnum))
-                        core_target_pos.append(int(t_resnum))
-                        pu_pos.append(int(q_resnum))
-                        target_pos.append(int(t_resnum))
+                        core_pu_pos.append(int(re.findall(r'\d+', q_resnum)[0]))
+                        core_target_pos.append(int(re.findall(r'\d+', t_resnum)[0]))
+                        pu_pos.append(int(re.findall(r'\d+', q_resnum)[0]))
+                        target_pos.append(int(re.findall(r'\d+', t_resnum)[0]))
                         target_seq += t_resname
                         pu_seq += q_resname
                     # Not aligned residues
