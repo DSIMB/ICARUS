@@ -81,26 +81,6 @@ def getsize(obj):
     return size
 
 
-def print_runtime(p1, p2, start_time, verbose, level=None):
-    """
-    Add program runtime to terminal output and summary.txt
-    """
-    runtime = time.time() - start_time
-    base_path = os.path.join(RESULTS_DIR, p1.name + "_and_" + p2.name, "summary.txt")
-    if not os.path.exists(base_path):
-        os.makedirs(os.path.dirname(base_path))
-    if verbose:
-        if level is not None:
-            print(f"\n\nLevel {level} runtime: {runtime:.1f} seconds")
-        else:
-            print(f"Total runtime: {runtime:.1f} seconds")
-    with open(base_path, "a") as f_out:
-        if level is not None:
-            f_out.write(f"\n\nLevel {level} runtime: {runtime:.1f} seconds")
-        else:
-            f_out.write(f"Total runtime: {runtime:.1f} seconds")
-
-
 def run_gdt(query, target, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=False, keep_ori_resnum=False):
     """
     Runs gdt2.pl with input query and target files.
@@ -231,7 +211,6 @@ def main(p1,
         start_t = time.time()
         results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
         textual_alignment_p1_vs_p2 = ""
-        print_runtime(p1, p2, start_t, verbose, "0")
         print("\n")
     else:
         results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
@@ -250,7 +229,6 @@ def main(p1,
                 else:
                     results.append(f" ├── level {expl_level} | {nb_pu_at_level} PUs: {graph.best_score}")
             solutions_cnt += 1
-            print_runtime(p1, p2, start_t, verbose, expl_level)
         if graph.succeeded:
             textual_alignment_p1_vs_p2 = draw_textual_alignment(p1, p2, graph, ori_res_num_and_chain1, smoothed_pu_output)
             results.append(textual_alignment_p1_vs_p2)
@@ -280,7 +258,6 @@ def main(p1,
         start_t = time.time()
         results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
         textual_alignment_p2_vs_p1 = ""
-        print_runtime(p1, p2, start_t, verbose, "0")
     else:
         results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
         start_t = time.time()
@@ -298,14 +275,10 @@ def main(p1,
                 else:
                     results.append(f" ├── level {expl_level} | {nb_pu_at_level} PUs: {graph.best_score}")
             solutions_cnt += 1
-            print_runtime(p1, p2, start_t, verbose, expl_level)
         if graph.succeeded:
             textual_alignment_p2_vs_p1 = draw_textual_alignment(p2, p1, graph, ori_res_num_and_chain2, smoothed_pu_output)
             results.append(textual_alignment_p2_vs_p1)
     results += "\n"
-    base_path = os.path.join(RESULTS_DIR, p1.name + "_and_" + p2.name)
-    if os.path.exists(base_path):
-        print(f"\n\nINFO: Overwriting existing results at {base_path}\n")
     os.makedirs(base_path, exist_ok=True)
 
     print("\n\n")
@@ -1519,6 +1492,11 @@ if __name__ == "__main__":
     exploration_level_p1 = None
     exploration_level_p2 = None
 
+    base_path = os.path.join(RESULTS_DIR, p1.name + "_and_" + p2.name)
+    if os.path.exists(base_path):
+        print(f"\n\nWARNING: Overwriting existing results at {base_path}\n")
+        shutil.rmtree(base_path)
+
     # Set limits for Protein 1
     exploration_level_p1, g.GraphPU.max_seg_level_p1 = set_exploration_limits(p1, nb_pus_requested, args.exploration_level)
 
@@ -1532,5 +1510,9 @@ if __name__ == "__main__":
         opt_prune, smoothed_pu_output,
         ori_res_num_and_chain1, ori_res_num_and_chain2, sequential, nb_cpu, verbose)
 
-    print_runtime(p1, p2, start_time, verbose)
+    # Add program runtime to terminal output and summary.txt
+    runtime = time.time() - start_time
+    print("Total runtime: {:.1f} seconds".format(runtime))
+    with open(os.path.join(base_path, "summary.txt"), "a") as f_out:
+        f_out.write("Total runtime: {:.1f} seconds".format(runtime))
     utils.clean()
