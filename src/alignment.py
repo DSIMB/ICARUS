@@ -104,9 +104,10 @@ class Alignment:
         ali = os.path.join(TMP_DIR, f"{query.name}-on-{target.name}")
         os.makedirs(ali, exist_ok=True)
 
-        alignment = f"{ali}/kpax_results/{query.name}_{target.name}_flex.pdb"
-        # Superimpose query to target with KPAX (1st structure is rigid and kpax aligns the 2nd onto the 1st one).
-        opt = ["-flex", "-nosubdirs", "-nohex", "-novmd", "-nojmol", "-nomatrix",
+        alignment_query_flex = f"{ali}/kpax_results/{target.name}_query.pdb"
+        alignment_target_flex = f"{ali}/kpax_results/{query.name}_{target.name}_flex.pdb"
+        # Superimpose query to target with KPAX (1st structure is rigid and kpax aligns the 2nd flexibly onto the 1st one).
+        opt = ["-flex", "-conect", "-nosubdirs", "-nohex", "-novmd", "-nojmol", "-nomatrix",
                "-nosse", "-nofasta", "-nopir", "-nokrmsd", "-noprofit", "-nohits",
                "-notops", "-norank", "-norainbow", "-pdb", target.path, query.path]
         output = subprocess.run([KPAX] + opt, cwd=ali, capture_output=True)
@@ -116,7 +117,11 @@ class Alignment:
             kpax_result_path = os.path.join(RESULTS_DIR, query.name + "_on_" + target.name, "result_PDBs", kpax_result_filename)
             # Create the directory because in special cases it is not yet created
             os.makedirs(os.path.dirname(kpax_result_path), exist_ok=True)
-            shutil.copy2(f"{alignment}", kpax_result_path)
+            with open(alignment_target_flex, "r") as f1, open(alignment_query_flex, "r") as f2, open(kpax_result_path, "w") as f:
+                for line in f1:
+                    f.write(line)
+                for line in f2:
+                    f.write(line)
             self.kpax_result_path = kpax_result_path
         # to_remove = ("*pml", "*lig", "*all", "*pdb")
         # files = []
