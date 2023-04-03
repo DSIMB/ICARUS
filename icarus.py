@@ -1293,10 +1293,10 @@ def parse_arguments():
         """
         Check if the user input chain is valid
         """
-        if chain.isalpha() and len(chain) == 1:
+        if (chain.isalpha() or chain.isdigit()) and len(chain) == 1:
             return chain
         raise argparse.ArgumentTypeError(
-            "Error option -a/--chain: PDB chain should be a single alphabetic character [A-B]")
+            "Error option -a/--chain: PDB chain should be a single alphabetic or digit character [a-zA-Z0-9]")
 
     def check_pu_size(size):
         """
