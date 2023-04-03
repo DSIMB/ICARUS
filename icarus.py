@@ -357,15 +357,15 @@ def main(p1,
         if os.path.exists(f"{RESULTS_DIR}/{p2.name}_on_{p1.name}"):
             shutil.move(f"{RESULTS_DIR}/{p2.name}_on_{p1.name}", dest2)
         print("\n\n\n\n\n\t\tGLOBAL BEST\n\n"+best)
-        with open(f"{base_path}/summary.txt", "w") as filin:
+        with open(f"{base_path}/summary.txt", "a") as filin:
             filin.write("\n".join(results))
-            filin.write("\n\n\n\n\n\t\tGLOBAL BEST\n\n"+best)
+            filin.write("\n\n\n\n\n\t\tGLOBAL BEST\n\n"+best_for_file)
             filin.write(f"Results can be found here:\n--> {dest1}\n--> {dest2}\n")
         print(f"Results can be found here:\n--> {dest1}\n--> {dest2}\n")
     else:
         print("\n")
         print(best)
-        with open(f"{base_path}/summary.txt", "w") as filin:
+        with open(f"{base_path}/summary.txt", "a") as filin:
             filin.write(best_for_file)
         if os.path.exists(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}"):
             shutil.rmtree(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}")
