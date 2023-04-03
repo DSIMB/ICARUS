@@ -123,11 +123,11 @@ class Alignment:
                 for line in f2:
                     f.write(line)
             self.kpax_result_path = kpax_result_path
-        # to_remove = ("*pml", "*lig", "*all", "*pdb")
-        # files = []
-        # for files_pattern in to_remove:
-        #     for files in Path(ali).glob(files_pattern):
-        #         files.unlink()
+        to_remove = ("*kpairs", "*kchains", "*kalign", "*kroc", "*kauc","*ktime", "*knames", "*kcode", "*log")
+        files = []
+        for files_pattern in to_remove:
+            for files in Path(ali).glob(files_pattern):
+                files.unlink()
         tm_score = None
         for line in res:
             # Get TM_score normalized by user-input (shortest length)
