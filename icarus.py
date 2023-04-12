@@ -81,7 +81,7 @@ def getsize(obj):
     return size
 
 
-def run_gdt(query, target, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=False, keep_ori_resnum=False):
+def run_gdt(query, target, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=False, keep_ori_resnum=False):
     """
     Runs gdt2.pl with input query and target files.
     As gdt requires file to be in current folder, files are copied in
@@ -90,7 +90,6 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori
     Args:
         - query (Protein or PU): query structure used as an input for gdt.pl.
         - target (Protein or PU): target structure used as an input for gdt.pl.
-        - min_len_p1_p2 (int): minimum length of the query and target sequences.
         - opt_prune (int): optional pruning by TM-score threshold.
         - save_output (bool): if True, gdt2.pl output is saved in a file.
         - keep_ori_resnum (bool): if True, original residue numbers are kept in the KPAX PDB output.
@@ -99,6 +98,7 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori
         - score (float): TM-score normalized by length of shortest structure.
     """
     mode = 0
+    min_len_p1_p2 = min(query.length, target.length)
     # KPAX before calculating the scores with gdt2.pl
     # use the original query and target residues numbers
     ali = Alignment(query, target, opt_prune, save_output, keep_ori_resnum)
@@ -137,7 +137,6 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori
 
 def main(p1,
          p2,
-         min_len_p1_p2,
          exploration_level,
          exploration_level_p1,
          exploration_level_p2,
@@ -156,7 +155,6 @@ def main(p1,
     Args:
         - p1 (Protein): One of the two protein to align.
         - p2 (Protein): The other protein to align.
-        - min_len_p1_p2 (int): Length of the smallest sequence between query and target sequences
         - exploration_level (int): Exploration level requested by the user
         - exploration_level_p1 (int): If not None, represents the new maximum exploration level
                                       for the protein 1 because the original exploration level
@@ -207,20 +205,19 @@ def main(p1,
     results.append("                                                    ======\n")
     results.append(f" *  {p1.name} against {p2.name}")
     print(f"\n\nAligning {p1.name} against {p2.name}", end="")
-    if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, we only do a KPAX
-        start_t = time.time()
-        results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
+    single_kpax_tmscore = run_gdt(p1, p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)
+    if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, or the tmscore is high enough, we only do a KPAX
+        results.append(f" └── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         textual_alignment_p1_vs_p2 = ""
         print("\n")
     else:
-        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
-        start_t = time.time()
+        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         for level in range(g.GraphPU.max_seg_level_p1):
             nb_pu_at_level = len(p1.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
             print(f"\n\nSOLUTION {solutions_cnt}: {p1.name} [level {expl_level} => {nb_pu_at_level} PUs] vs {p2.name}")
             print(f"{56*'-'}")  # for aesthetic purposes
-            graph = g.GraphPU(p1, p2, level + 1, expl_level, min_len_p1_p2, ori_res_num_and_chain1, ori_res_num_and_chain2, nb_cpu, opt_prune, smoothed_pu_output, sequential)
+            graph = g.GraphPU(p1, p2, level + 1, expl_level, ori_res_num_and_chain1, ori_res_num_and_chain2, nb_cpu, opt_prune, smoothed_pu_output, sequential)
             if graph.succeeded:
                 scores.append([graph.best_score, graph.pu_order_text, graph.best_ali, "1"])
                 # aesthetics: last line to write
@@ -254,19 +251,18 @@ def main(p1,
     results.append("                                                    SCORES")
     results.append("                                                    ======\n")
     results.append(f" *  {p2.name} against {p1.name}")
-    if exploration_level_p2 == 0:  # Peeling coudn't find any PU on the protein, we only do a KPAX
-        start_t = time.time()
-        results.append(f" └── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
+    single_kpax_tmscore = run_gdt(p2, p1, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)
+    if exploration_level_p1 == 0 or single_kpax_tmscore > 0.6:  # Peeling coudn't find any PU on the protein, or the tmscore is high enough, we only do a KPAX
+        results.append(f" └── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         textual_alignment_p2_vs_p1 = ""
     else:
-        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
-        start_t = time.time()
+        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         for level in range(g.GraphPU.max_seg_level_p2):
             nb_pu_at_level = len(p2.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
             print(f"\n\nSOLUTION {solutions_cnt}: {p2.name} [level {expl_level} => {nb_pu_at_level} PUs] vs {p1.name}")
             print(f"{56*'-'}")  # for aesthetic purposes
-            graph = g.GraphPU(p2, p1, level + 1, expl_level, min_len_p1_p2, ori_res_num_and_chain2, ori_res_num_and_chain1, nb_cpu, opt_prune, smoothed_pu_output, sequential)
+            graph = g.GraphPU(p2, p1, level + 1, expl_level, ori_res_num_and_chain2, ori_res_num_and_chain1, nb_cpu, opt_prune, smoothed_pu_output, sequential)
             if graph.succeeded:
                 scores.append([graph.best_score, graph.pu_order_text, graph.best_ali, "2"])
                 # aesthetics: last line to write
@@ -315,8 +311,8 @@ def main(p1,
         print("              \033[93mBest overall results are shown at the end.\033[0m\n")
         print("\n".join(results))
         # Saving output of simple KPAX alignment
-        run_gdt(p1, p2, min_len_p1_p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=True, keep_ori_resnum=True)
-        run_gdt(p2, p1, min_len_p1_p2, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, save_output=True, keep_ori_resnum=True)
+        run_gdt(p1, p2, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=True, keep_ori_resnum=True)
+        run_gdt(p2, p1, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, save_output=True, keep_ori_resnum=True)
         dest1 = os.path.join(base_path, f"{p1.name}_on_{p2.name}")
         dest2 = os.path.join(base_path, f"{p2.name}_on_{p1.name}")
         if os.path.exists(dest1):
@@ -1486,7 +1482,6 @@ if __name__ == "__main__":
     p2 = p.Protein(new_path2, ori_path=path2, min_len_pu=min_len_pu2)
     p2.set_1d_seq()
     print(f"\n    {p2.length} aa\n    Seq: {p2.seq}")
-    min_len_p1_p2 = min(p1.length, p2.length)
     max_len_p1_p2 = max(p1.length, p2.length)
     nb_pus_requested = INTERVALS[exploration_level]
     exploration_level_p1 = None
@@ -1505,7 +1500,7 @@ if __name__ == "__main__":
 
     large_job_warning(max_len_p1_p2, exploration_level_p1, exploration_level_p2, force)
 
-    main(p1, p2, min_len_p1_p2, exploration_level,
+    main(p1, p2, exploration_level,
         exploration_level_p1, exploration_level_p2,
         opt_prune, smoothed_pu_output,
         ori_res_num_and_chain1, ori_res_num_and_chain2, sequential, nb_cpu, verbose)

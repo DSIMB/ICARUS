@@ -44,7 +44,6 @@ class GraphPU:
                  target,
                  seg_level,
                  expl_level,
-                 min_len_p1_p2,
                  ori_res_num_and_chain_query,
                  ori_res_num_and_chain_target,
                  nb_cpu,
@@ -73,7 +72,7 @@ class GraphPU:
         """
 
         __slots__ = ("query", "target", "seg_level", "expl_level", 
-                    "min_len_p1_p2", "nb_cpu", "opt_prune",
+                    "nb_cpu", "opt_prune",
                     "best_ali", "best_score", "final_alis", "best_path", 
                     "best_gdt2_output", "best_pu_order", "pu_order_text",
                     "pu_range", "all_alis", "query", "target", "seg_level",
@@ -124,7 +123,7 @@ class GraphPU:
         }
         self.build_graph(nb_cpu)
         self.merge_all(nb_cpu)
-        succeeded = self.compute_scores(min_len_p1_p2, nb_cpu, opt_prune)
+        succeeded = self.compute_scores(nb_cpu, opt_prune)
         if succeeded:
             # Smooth the positions of the PUs in the best alignments to be able to print them correctly
             # Remove PU positions that are isolated:
@@ -604,7 +603,7 @@ class GraphPU:
             paths.append((merged_pus_path, merged_pus_path_renum, alignments))
         return True
 
-    def run_gdt2(scores, min_len_p1_p2, opt_prune, target, query):
+    def run_gdt2(scores, opt_prune, target, query):
         """
         DO NOT PUT "self" TO THIS FUNCTION,
         IT SLOWS DOWN MULTIPROCESSING BY A LOT !
@@ -624,6 +623,7 @@ class GraphPU:
                 TM-score normalized by length of shortest structure.
         """
         mode = 0
+        min_len_p1_p2 = min(query.length, target.length)
         # KPAX before calculating the scores with gdt2.pl
         ali = Alignment(query, target, opt_prune)
         if ali.success:
@@ -649,13 +649,12 @@ class GraphPU:
                     break
             return True
 
-    def compute_scores(self, min_len_p1_p2, nb_cpu, opt_prune):
+    def compute_scores(self, nb_cpu, opt_prune):
         """
         Computes all scores using the run_gdt2 function, select best alignment
         and its score and stores it in self.
 
         Args:
-            - min_len_p1_p2 (int): minimum length of the two proteins
             - nb_cpu (int): number of cpu to use
             - opt_prune (float): threshold for pruning
 
@@ -678,7 +677,7 @@ class GraphPU:
             chunksize = self.calc_chunksize(nb_cpu, nb_prots)
             with multiprocessing.Pool(processes=nb_cpu, initializer=signal.signal, initargs=(signal.SIGINT, signal.SIG_IGN)) as p:
                 try:
-                    func = partial(GraphPU.run_gdt2, scores, min_len_p1_p2, opt_prune, self.target)
+                    func = partial(GraphPU.run_gdt2, scores, opt_prune, self.target)
                     for i, _ in enumerate(p.imap_unordered(func, prots, chunksize)):
                         self.progressbar(i + 1, nb_prots, "Compute scores")
                     p.close()
