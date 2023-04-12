@@ -25,7 +25,6 @@ SWORD = os.path.join(PROJECT_DIR, "bin", "SWORD")
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 PDB_CLEAN_DIR = os.path.join(WORK_DIR, "PDBs_Clean")
 PDB_STAND_DIR = os.path.join(WORK_DIR, "PDBs_Stand")
-TMP_DIR = utils.TMP_DIR
 
 class Protein:
     """

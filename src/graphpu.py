@@ -28,7 +28,6 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 RESULTS_DIR = os.path.join(WORK_DIR, "results")
 GDT = os.path.join(PROJECT_DIR, "bin", "gdt2.pl")
-TMP_DIR = utils.TMP_DIR
 
 class GraphPU:
     """
@@ -148,7 +147,7 @@ class GraphPU:
             # Move the best aligned query structure to the result directory
             shutil.copy2(self.best_ori_query_renum_pdb, solution_pdb_renum)
             shutil.copy2(self.best_ali, solution_pdb)
-            target_renum_path = os.path.join(TMP_DIR, target.name)
+            target_renum_path = os.path.join(os.environ.get('ICARUS_TMP_DIR'), target.name)
             # Copy the original target and reformat it
             shutil.copy2(target.ori_path, target_renum_path)
             Protein.reformat_struct(target_renum_path)
@@ -374,8 +373,8 @@ class GraphPU:
                     p.close()
                     p.join()
                 except KeyboardInterrupt:
-                    if os.path.exists(TMP_DIR):
-                        shutil.rmtree(TMP_DIR, ignore_errors=True)
+                    if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+                        shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'), ignore_errors=True)
                         print("\nQuitting gracefully, bye !")
                     sys.exit(0)
             # BRANCH & BOUND
@@ -536,8 +535,8 @@ class GraphPU:
                 p.close()
                 p.join()
             except KeyboardInterrupt:
-                if os.path.exists(TMP_DIR):
-                    shutil.rmtree(TMP_DIR, ignore_errors=True)
+                if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+                    shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'), ignore_errors=True)
                     print("\nQuitting gracefully, bye !")
                 sys.exit(0)
         # After pruning by TM-score intermediate alignments,
@@ -575,7 +574,7 @@ class GraphPU:
         # from 1 --> end
         pu_order = GraphPU.get_pu_order_from_target_ascending_pos(alignments)
         suffix = utils.get_random_name()
-        base_path = f"{TMP_DIR}/{query.name}-level_{expl_level}_{nb_PUs}_PUs-on-{target.name}/"
+        base_path = f"{os.environ.get('ICARUS_TMP_DIR')}/{query.name}-level_{expl_level}_{nb_PUs}_PUs-on-{target.name}/"
         os.makedirs(base_path, exist_ok=True)
         merged_pus_path_renum = os.path.join(base_path, f"merged_pus_ali_{suffix}_renum.pdb")
         # Merge the positions of the PUs that aligned to corresponding ascending target positions
@@ -627,10 +626,10 @@ class GraphPU:
         # KPAX before calculating the scores with gdt2.pl
         ali = Alignment(query, target, opt_prune)
         if ali.success:
-            path_query_name = f"{TMP_DIR}/{query.name}"
+            path_query_name = f"{os.environ.get('ICARUS_TMP_DIR')}/{query.name}"
             with open(path_query_name, "w") as filout:
                 filout.write(ali.new_query)
-            path_new_target_name = f"{TMP_DIR}/{target.name}_ali_{query.name}"
+            path_new_target_name = f"{os.environ.get('ICARUS_TMP_DIR')}/{target.name}_ali_{query.name}"
             with open(path_new_target_name, "w") as filout:
                 filout.write(ali.new_target)
             command = f"{GDT} -pdb '{path_query_name} {path_new_target_name}' -mode {str(mode)} -len {min_len_p1_p2}"
@@ -683,8 +682,8 @@ class GraphPU:
                     p.close()
                     p.join()
                 except KeyboardInterrupt:
-                    if os.path.exists(TMP_DIR):
-                        shutil.rmtree(TMP_DIR, ignore_errors=True)
+                    if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+                        shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'), ignore_errors=True)
                         print("\nQuitting gracefully, bye !")
                     sys.exit(0)
             self.best_ali = max(scores.items(), key=lambda x: x[1][0])[0]

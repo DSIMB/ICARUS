@@ -30,16 +30,13 @@ from src.alignment import Alignment
 # Start monitoring program runtime
 start_time = time.time()
 
-TMP_DIR = utils.TMP_DIR
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 RESULTS_DIR = os.path.join(WORK_DIR, "results")
 PDB_CLEAN_DIR = os.path.join(WORK_DIR, "PDBs_Clean")
 PDB_STAND_DIR = os.path.join(WORK_DIR, "PDBs_Stand")
 GDT = os.path.join(PROJECT_DIR, "bin", "gdt2.pl")
-for path in [WORK_DIR, RESULTS_DIR, TMP_DIR]:
-    if not os.path.exists(path):
-        os.makedirs(path, exist_ok=True)
+
 # Keys=explore level ; values=number of PUs to consider in graph
 INTERVALS = {0: [0], 1: [2, 3], 2: [4, 5], 3: [6], 4: [7], 5: [8]}
 NB_PUS_2_EXPLORE_LEVEL = {0: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 4, 8: 5}
@@ -50,8 +47,8 @@ def signal_handler(signal, handler):
     Catch CTRL+C signal
     Clean the tmp directory before stopping
     """
-    if os.path.exists(TMP_DIR):
-        shutil.rmtree(TMP_DIR, ignore_errors=True)
+    if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+        shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'), ignore_errors=True)
         print("\nQuitting gracefully, bye !")
     sys.exit(0)
 
@@ -1215,8 +1212,8 @@ def clean_input_pdb_files(path1, path2, chain1, chain2):
     # - Check if it is a legitimate amino acids PDB
     ori_res_num_and_chain1 = {}
     ori_res_num_and_chain2 = {}
-    new_path1 = os.path.join(TMP_DIR, os.path.basename(os.path.splitext(path1)[0]))
-    new_path2 = os.path.join(TMP_DIR, os.path.basename(os.path.splitext(path2)[0]))
+    new_path1 = os.path.join(os.environ.get('ICARUS_TMP_DIR'), os.path.basename(os.path.splitext(path1)[0]))
+    new_path2 = os.path.join(os.environ.get('ICARUS_TMP_DIR'), os.path.basename(os.path.splitext(path2)[0]))
     len1 = utils.reformat_struct(path1, ori_res_num_and_chain1, chain1, new_path = new_path1)
     len2 = utils.reformat_struct(path2, ori_res_num_and_chain2, chain2, new_path = new_path2)
     print("done\n")
@@ -1445,12 +1442,27 @@ def parse_arguments():
                                           intermediate results and alignments'''),
         action="store_true",
         default=False)
+    optional.add_argument(
+        "-u",
+        "--use-ramfs",
+        help=textwrap.dedent('''\
+                        Use the native TMPFS partition /dev/shm on linux systems to boost i/o perfs.
+                        This may use a large amount of RAM if proteins are large e.g. > 200 residues'''),
+        action="store_true",
+        default=False)
     args = parser.parse_args()
     return args
 
 if __name__ == "__main__":
     # Parse CLI arguments
     args = parse_arguments()
+
+    os.environ['USE_RAMFS'] = '1' if args.use_ramfs is True else '0'
+    utils.set_tmp_dir()
+    TMP_DIR = os.environ.get('ICARUS_TMP_DIR')
+    for path in [WORK_DIR, RESULTS_DIR, TMP_DIR]:
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
 
     # Set variables
     p.Protein.seg_size = args.min_size

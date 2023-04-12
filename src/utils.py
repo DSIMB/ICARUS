@@ -20,22 +20,28 @@ def get_random_name():
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 plt = platform.system()
-# Use the native tmpfs partition on linux systems to boost i/o perfs 
-if plt == "Linux":
-    TMP_DIR = os.path.join("/dev/shm", get_random_name())
-# Use default /tmp directory because not tmpfs partition on Mac or other OS
-elif plt == "Darwin" or not os.path.exists("/dev/shm"):
-    TMP_DIR = os.path.join("/tmp", get_random_name())
+
+def set_tmp_dir():
+    """
+        Create working directory, either in the /dev/shm tmpfs for faster i/o,
+        of in /tmp.
+    """
+    # Use default /tmp directory because not tmpfs partition on Mac or other OS
+    os.environ["ICARUS_TMP_DIR"] = os.path.join("/tmp", get_random_name())
+    if os.environ.get('USE_RAMFS') == '1' and plt == "Linux":
+        # Use the native tmpfs partition on linux systems to boost i/o perfs 
+        os.environ["ICARUS_TMP_DIR"] = os.path.join("/dev/shm", get_random_name())
+
 
 def clean():
     """
     Clean working dir in /dev/shm/<random> or /tmp/<random> folder.
     """
     try:
-        if os.path.exists(TMP_DIR):
-            shutil.rmtree(TMP_DIR)
+        if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+            shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'))
     except OSError as e:
-        print("Failed to delete tmp dir '%s'. Reason: %s" % (TMP_DIR, e))
+        print("Failed to delete tmp dir '%s'. Reason: %s" % (os.environ.get('ICARUS_TMP_DIR'), e))
 
 
 def product(liste):

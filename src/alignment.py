@@ -20,8 +20,6 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KPAX = os.path.join(PROJECT_DIR, "bin", "kpax", "bin", "kpax5.1.3.x64")
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 RESULTS_DIR = os.path.join(WORK_DIR, "results")
-TMP_DIR = utils.TMP_DIR
-
 class Alignment:
     """
     The purpose of this class in storing paths and informations relative to an
@@ -101,7 +99,7 @@ class Alignment:
            
             - set self.score
         """
-        ali = os.path.join(TMP_DIR, f"{query.name}-on-{target.name}")
+        ali = os.path.join(os.environ.get('ICARUS_TMP_DIR'), f"{query.name}-on-{target.name}")
         os.makedirs(ali, exist_ok=True)
 
         alignment_query_flex = f"{ali}/kpax_results/{target.name}_query.pdb"
@@ -264,7 +262,7 @@ class Alignment:
         """
         res_to_del = [res for res in self.all_aligned["core_target_aligned_positions"]]
         old_pdb = self.target
-        new_pdb = os.path.join(TMP_DIR, utils.get_random_name() + ".pdb")
+        new_pdb = os.path.join(os.environ.get('ICARUS_TMP_DIR'), utils.get_random_name() + ".pdb")
         with open(old_pdb.path, "r") as filin, open(new_pdb, 'w') as filout:
             for atom in filin:
                 res_nb = int(atom[22:26])
