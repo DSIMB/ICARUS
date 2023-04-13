@@ -249,7 +249,7 @@ def main(p1,
     results.append("                                                    ======\n")
     results.append(f" *  {p2.name} against {p1.name}")
     single_kpax_tmscore = run_gdt(p2, p1, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)
-    if exploration_level_p1 == 0 or single_kpax_tmscore > 0.6:  # Peeling coudn't find any PU on the protein, or the tmscore is high enough, we only do a KPAX
+    if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, or the tmscore is high enough, we only do a KPAX
         results.append(f" └── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         textual_alignment_p2_vs_p1 = ""
     else:
