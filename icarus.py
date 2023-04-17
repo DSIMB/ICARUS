@@ -38,8 +38,8 @@ PDB_STAND_DIR = os.path.join(WORK_DIR, "PDBs_Stand")
 GDT = os.path.join(PROJECT_DIR, "bin", "gdt2.pl")
 
 # Keys=explore level ; values=number of PUs to consider in graph
-INTERVALS = {0: [0], 1: [2, 3], 2: [4, 5], 3: [6], 4: [7], 5: [8]}
-NB_PUS_2_EXPLORE_LEVEL = {0: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 4, 8: 5}
+INTERVALS = {0: [0], 1: [2, 3], 2: [4, 5], 3: [6], 4: [7]}
+NB_PUS_2_EXPLORE_LEVEL = {0: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 4}
 
 
 def signal_handler(signal, handler):
@@ -1387,8 +1387,7 @@ def parse_arguments():
                                 1 -> [2, 3],
                                 2 -> [4, 5],
                                 3 -> 6,
-                                4 -> 7,
-                                5 -> 8'''),
+                                4 -> 7'''),
         default=2,
         type=check_exploration_level)
     optional.add_argument(
