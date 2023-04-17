@@ -167,14 +167,22 @@ def reformat_struct(path, ori_res_num_and_chain, chain, new_path=""):
     new_chain_name = "A"
     # Use OrderedDict() objects to remember the order of residues insertion in the dictionary
     resnum_to_res = OrderedDict()
+    flag_ins_code = False
     with open(path, "r") as filin:
         for line in filin:
             if line.startswith("ATOM"):
                 new_atm_num += 1
                 old_res_num = int(line[22:26])
+                insert_code = line[26:27]
                 atm_name = line[12:16].strip()
                 res_name = line[17:20].strip()
                 chain_name = line[21:22].strip()
+                # Remove insertion code
+                if insert_code != " ":
+                    line = line[:26] + " " + line[27:]
+                    if not flag_ins_code:
+                        print(f"\n\nWARNING: Insertion code detected and removed for protein at: {path}.")
+                        flag_ins_code = True
                 if chain_name == "":
                     chain_name = "A" 
                 alter_pos = line[16:17]
