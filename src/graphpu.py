@@ -580,7 +580,6 @@ class GraphPU:
         # Merge the positions of the PUs that aligned to corresponding ascending target positions
         merged_pus = []
         query_seq = ""
-        print("COUCOU ", pu_order)
         for pu_idx in pu_order:
             ali = alignments[pu_idx]
             query_seq += ali.all_aligned["pu_seq"]
