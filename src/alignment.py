@@ -177,14 +177,10 @@ class Alignment:
                         target_seq += t_resname
                         pu_seq += q_resname
                     # Not aligned residues
-                    # else:
-                    #     if query.strip() != "-":
-                    #         q_chain, q_resnum, q_resname = query.strip().split(":")
-                    #         pu_pos.append(int(q_resnum))
-                    #     if target.strip() != "-":
-                    #         t_chain, t_resnum, t_resname = target.strip().split(":")
-                    #         target_pos.append(int(t_resnum))
-        return core_pu_pos, core_target_pos, target_pos, pu_pos, pu_seq, target_seq
+                    else:
+                        if query.strip() != "-":
+                            q_chain, q_resnum, q_resname = query.strip().split(":")
+                            pu_pos.append(int(q_resnum))
 
     def _get_match(self):
         """
