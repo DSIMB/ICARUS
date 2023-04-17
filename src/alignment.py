@@ -140,22 +140,17 @@ class Alignment:
             self.path = ali+"/kpax_results"
             self.score = tm_score
 
-    def _get_core_and_all_matching_residues(self):
+    def _get_all_matching_residues(self):
         """
-        Get the core matching residues between the query and the target from the KPAX output,
-        as well as all the aligned residues.
+        Get all the aligned residues between the query and the target from the KPAX output.
         Also get the target sequence involved in the alignment with the PU.
 
         Args:
             - aa_dict (dict): dictionary of amino acids
 
         Returns:
-            - core_pu_pos (list): list of the core PU matching residues in the query
-            - core_target_pos (list): list of the core matching residues in the target
             - all_target_pos (list): list of all the matching residues in the target
         """
-        core_pu_pos = []
-        core_target_pos = []
         target_pos = []
         pu_pos = [] # CA only
         target_pos = []  # CA only
@@ -170,8 +165,6 @@ class Alignment:
                     if star.strip() == "*":
                         q_chain, q_resnum, q_resname = query.strip().split(":")
                         t_chain, t_resnum, t_resname = target.strip().split(":")
-                        core_pu_pos.append(int(re.findall(r'\d+', q_resnum)[0]))
-                        core_target_pos.append(int(re.findall(r'\d+', t_resnum)[0]))
                         pu_pos.append(int(re.findall(r'\d+', q_resnum)[0]))
                         target_pos.append(int(re.findall(r'\d+', t_resnum)[0]))
                         target_seq += t_resname
@@ -181,6 +174,7 @@ class Alignment:
                         if query.strip() != "-":
                             q_chain, q_resnum, q_resname = query.strip().split(":")
                             pu_pos.append(int(q_resnum))
+        return target_pos, pu_pos, pu_seq, target_seq
 
     def _get_match(self):
         """
@@ -193,12 +187,9 @@ class Alignment:
         Attributes:
             - set self.all_aligned
         """
-        # Get the best core matching residues between query and target according to KPAX
-        # and get all the atom coordinates of the *best* aligned residues in the query and target
-        core_pu_pos, core_target_pos, target_pos, pu_pos, pu_seq, target_seq = self._get_core_and_all_matching_residues() 
-        self.all_aligned = {"core_pu_aligned_positions": core_pu_pos,
-                            "core_target_aligned_positions": core_target_pos,
-                            "all_pu_aligned_positions": pu_pos,
+        # Get the matching residues and all their atom coordinates between query and target according to KPAX
+        target_pos, pu_pos, pu_seq, target_seq = self._get_all_matching_residues() 
+        self.all_aligned = {"all_pu_aligned_positions": pu_pos,
                             "all_target_aligned_positions": target_pos,
                             "pu_seq": "".join(pu_seq),
                             "target_seq": "".join(target_seq)}
@@ -206,7 +197,7 @@ class Alignment:
     def _get_structures(self):
         """
         Fetch structural conformation of PU or target that have been subject to
-        rotational translation during KPAX. The query stays rigid.
+        rotational translation during KPAX.
         Stores informations in Alignment.new_query and Alignment.new_target
         variables.
 
@@ -256,7 +247,7 @@ class Alignment:
         Attributes:
             - Set self.updated_target as the path to the updated structure.
         """
-        res_to_del = [res for res in self.all_aligned["core_target_aligned_positions"]]
+        res_to_del = [res for res in self.all_aligned["all_target_aligned_positions"]]
         old_pdb = self.target
         new_pdb = os.path.join(os.environ.get('ICARUS_TMP_DIR'), utils.get_random_name() + ".pdb")
         with open(old_pdb.path, "r") as filin, open(new_pdb, 'w') as filout:
@@ -371,15 +362,15 @@ class Alignment:
             - n_gaps (int): maximum number of gaps authorized between contiguous positions
 
         Returns:
-            - self.all_aligned["smoothed_core_target_aligned_positions"] (list): list of smoothed target positions
+            - self.all_aligned["smoothed_all_target_aligned_positions"] (list): list of smoothed target positions
                 or the original list if no smoothing was required
         """
         # Best path in the graph == best PUs aligned against the target
         smoothed_target_positions = []
         gaps_vect = np.array([])
-        for i in range(len(self.all_aligned["core_target_aligned_positions"]) - 1):
-            t_pos = self.all_aligned["core_target_aligned_positions"][i]
-            t_next_pos = self.all_aligned["core_target_aligned_positions"][i+1]
+        for i in range(len(self.all_aligned["all_target_aligned_positions"]) - 1):
+            t_pos = self.all_aligned["all_target_aligned_positions"][i]
+            t_next_pos = self.all_aligned["all_target_aligned_positions"][i+1]
             # Vector of gaps between positions: [1, 2, 4] --> [0, 1]
             gaps_vect = np.append(gaps_vect, (t_next_pos - t_pos - 1))
         # Get indexes of where there are gaps > `n_gaps` positions
@@ -387,7 +378,7 @@ class Alignment:
         # Smooth only when there are gaps, otherwise keep the original positions
         if len(idx_of_large_gaps) != 0:
             # Take care of the first gap first
-            t_slice = self.all_aligned["core_target_aligned_positions"][:idx_of_large_gaps[0] + 1]
+            t_slice = self.all_aligned["all_target_aligned_positions"][:idx_of_large_gaps[0] + 1]
             # Keep only groups of positions of size `min_contiguous` or more
             if len(t_slice) >= min_contiguous:
                 smoothed_target_positions += t_slice
@@ -396,24 +387,24 @@ class Alignment:
                 for j in range(len(idx_of_large_gaps) - 1):
                     idx = idx_of_large_gaps[j]
                     next_idx = idx_of_large_gaps[j+1]
-                    t_slice = self.all_aligned["core_target_aligned_positions"][idx+1:next_idx + 1]
+                    t_slice = self.all_aligned["all_target_aligned_positions"][idx+1:next_idx + 1]
                     if len(t_slice) >= min_contiguous:
                         smoothed_target_positions += t_slice
             # Take care of the last gap
             # If the gap occurs between the `min_contiguous` before last and last positions
             # then skip since the group won't be `min_contiguous` long
-            if idx_of_large_gaps[-1] != len(self.all_aligned["core_target_aligned_positions"]) - min_contiguous:
-                t_slice = self.all_aligned["core_target_aligned_positions"][idx_of_large_gaps[-1]+1:]
+            if idx_of_large_gaps[-1] != len(self.all_aligned["all_target_aligned_positions"]) - min_contiguous:
+                t_slice = self.all_aligned["all_target_aligned_positions"][idx_of_large_gaps[-1]+1:]
                 if len(t_slice) >= min_contiguous:
                     smoothed_target_positions += t_slice
-            self.all_aligned["smoothed_core_target_aligned_positions"] = smoothed_target_positions
+            self.all_aligned["smoothed_all_target_aligned_positions"] = smoothed_target_positions
             # Case when there are gaps, but when removing the gaps, there is nothing left.
             # Keep the core positions anyway.
             if len(smoothed_target_positions) == 0:
-                self.all_aligned["smoothed_core_target_aligned_positions"] = self.all_aligned["core_target_aligned_positions"]
+                self.all_aligned["smoothed_all_target_aligned_positions"] = self.all_aligned["all_target_aligned_positions"]
         else:
-            self.all_aligned["smoothed_core_target_aligned_positions"] = self.all_aligned["core_target_aligned_positions"]
-        return self.all_aligned["smoothed_core_target_aligned_positions"]
+            self.all_aligned["smoothed_all_target_aligned_positions"] = self.all_aligned["all_target_aligned_positions"]
+        return self.all_aligned["smoothed_all_target_aligned_positions"]
 
     @staticmethod
     def multiple_alignment(query_prot, target_prot, opt_prune, seg_level=0):

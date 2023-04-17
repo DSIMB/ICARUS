@@ -267,7 +267,7 @@ class GraphPU:
             else:  # We are not at the root node, we need to get the encoded vector of the previous node
                 encoded_ali = tree_pu_vectors[(node[:-1], int(node[-1]))]
             # Retrieve aligned core positions of the PU on the target
-            aligned_pos = np.asarray([x-1 for x in ali.all_aligned["core_target_aligned_positions"]])
+            aligned_pos = np.asarray([x-1 for x in ali.all_aligned["all_target_aligned_positions"]])
             # Replace positions with id_pu for aligned positions in full vector
             encoded_ali[aligned_pos] = id_pu
             tree_pu_vectors[(node, id_pu)] = encoded_ali
@@ -580,6 +580,7 @@ class GraphPU:
         # Merge the positions of the PUs that aligned to corresponding ascending target positions
         merged_pus = []
         query_seq = ""
+        print("COUCOU ", pu_order)
         for pu_idx in pu_order:
             ali = alignments[pu_idx]
             query_seq += ali.all_aligned["pu_seq"]
@@ -643,6 +644,8 @@ class GraphPU:
                 if "user length input" in line:
                     # retrieves scores as floats and return also the corresponding
                     # gdt2 output
+                    print(float(line[11:16]))
+                    print("\n".join(output))
                     scores[query.path] = (float(line[11:16]), output)
                     # skip next lines
                     break
