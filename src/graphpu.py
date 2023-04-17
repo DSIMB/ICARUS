@@ -644,8 +644,6 @@ class GraphPU:
                 if "user length input" in line:
                     # retrieves scores as floats and return also the corresponding
                     # gdt2 output
-                    print(float(line[11:16]))
-                    print("\n".join(output))
                     scores[query.path] = (float(line[11:16]), output)
                     # skip next lines
                     break
