@@ -106,9 +106,9 @@ class Alignment:
         os.makedirs(ali, exist_ok=True)
 
         alignment_query_flex = f"{ali}/kpax_results/{target.name}_query.pdb"
-        alignment_target_flex = f"{ali}/kpax_results/{query.name}_{target.name}_flex.pdb"
+        alignment_target_flex = f"{ali}/kpax_results/{query.name}_{target.name}.pdb"
         # Superimpose query to target with KPAX (1st structure is rigid and kpax aligns the 2nd flexibly onto the 1st one).
-        opt = ["-flex", "-conect", "-nosubdirs", "-nohex", "-novmd", "-nojmol", "-nomatrix",
+        opt = ["-conect", "-nosubdirs", "-nohex", "-novmd", "-nojmol", "-nomatrix",
                "-nosse", "-nofasta", "-nopir", "-nokrmsd", "-noprofit", "-nohits",
                "-notops", "-norank", "-norainbow", "-pdb", target.path, query.path]
         output = subprocess.run([KPAX] + opt, cwd=ali, capture_output=True)
@@ -159,7 +159,7 @@ class Alignment:
         target_pos = []  # CA only
         pu_seq = ""
         target_seq = ""
-        with open(f"{self.path}/{self.query.name}_{self.target.name}_flex.wpairs", "r") as filin:
+        with open(f"{self.path}/{self.query.name}_{self.target.name}.wpairs", "r") as filin:
             for line in filin:
                 line = line.strip()
                 if not line.startswith("#"):
@@ -215,7 +215,7 @@ class Alignment:
         new_query = ""
         new_query_dict = {}
         new_target = ""
-        with open(f"{self.path}/{self.query.name}_{self.target.name}_flex.pdb", 'r') as filin:
+        with open(f"{self.path}/{self.query.name}_{self.target.name}.pdb", 'r') as filin:
             for line in filin:
                 line = line.strip()
                 if line.startswith("ATOM"):
