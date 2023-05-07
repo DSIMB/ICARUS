@@ -35,10 +35,9 @@ FROM ubuntu:20.04 AS compile
 
 COPY --from=mamba_build /venv /venv
 
-# g++ required to compile TM-align
 RUN apt-get update \ 
     && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
-    g++ \
+    wget \
     ca-certificates \
     git \
     && rm -rf /var/lib/apt/lists/*
@@ -56,8 +55,7 @@ RUN git clone https://github.com/DSIMB/ICARUS.git /icarus
 
 WORKDIR /icarus
 
-# Compile TM-align, install SWORD
-# and create directories
+# Install SWORD and create directories
 RUN ./install.sh
 
 ### RUNTIME-STAGE: Use the slimest image possible
@@ -67,7 +65,7 @@ FROM ubuntu:20.04 as runtime
 
 LABEL program="ICARUS"
 LABEL description="A flexible structural alignment method based on protein peeling."
-LABEL version="1.2"
+LABEL version="2.0"
 LABEL maintainer="gabriel.cretin@u-paris.fr"
 
 WORKDIR /icarus
