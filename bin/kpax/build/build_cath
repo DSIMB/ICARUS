@@ -1,0 +1,51 @@
+#!/bin/sh
+#
+#  import a CATH database into Kpax ...
+#
+#  YOU WILL NEED TO EDIT THIS SCRIPT TO MAKE IT WORK!
+#
+#  This script assumes you have downloaded the chopped CATH PDB files
+#  and that you have also downloaded the CATH file called CathDomainList
+#  and copied it to a folder called "kpax_database". The CATH data is 
+#  available here:
+
+#  http://release.cathdb.info/v3.4.0/CathDomainList
+#  http://release.cathdb.info/v3.4.0/CathDomainPdb.S35.v3_4_0.tgz
+
+# assume the above CATH data is here (EDIT THIS!) and that the CATH
+# PDB files have been untarred into a sub-folder called dompdb:
+
+CATH_ROOT=/data/Cath
+CATH_ROOT=/home/ritchied/Cath
+
+#  Assume you have something like: KPAX_DATABASE=/home/dritchie/kpax_database
+
+if [ -z "${KPAX_DATABASE}" ]; then
+   echo "Please define the variable KPAX_DATABASE first!"
+   exit
+fi
+
+#  remove previous database
+
+rm -rf ${KPAX_DATABASE}/cath_kpax
+
+# make the import follow the style for Cath
+
+if [ ! -f "${KPAX_DATABASE}/CathDomainList" ]; then
+
+   ln -s ${CATH_ROOT}/CathDomainList  ${KPAX_DATABASE}/CathDomainList
+fi
+
+# load the PDB files from ${CATH_ROOT}/dompdb and make a
+# CATH-flavoured database in ${KPAX_DATABASE}/cath_kpax
+# (this assumes the presence of ${KPAX_DATABASE}/CathDomainList).
+
+kpax -cath -build=cath -stats -source=${CATH_ROOT}/dompdb
+    
+
+#
+#  You can now query the database using:
+#
+#  kpax -db=cath  query-file.pdb
+#
+

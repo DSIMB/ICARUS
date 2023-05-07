@@ -4,7 +4,6 @@ This module implements the GraphPU class.
 
 import multiprocessing
 import os
-import re
 import shlex
 import shutil
 import signal
@@ -29,20 +28,6 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 RESULTS_DIR = os.path.join(WORK_DIR, "results")
 GDT = os.path.join(PROJECT_DIR, "bin", "gdt2.pl")
-TMP_DIR = utils.TMP_DIR
-
-def signal_handler(signal, handler):
-    """
-    Catch CTRL+C signal
-    Clean the tmp directory before stopping
-    """
-    if os.path.exists(TMP_DIR):
-        shutil.rmtree(TMP_DIR, ignore_errors=True)
-        print("\nQuitting gracefully, bye !")
-    sys.exit(0)
-
-# Catch CTRL+C signal and quit gracefully by cleaning traces
-signal.signal(signal.SIGINT, signal_handler)
 
 class GraphPU:
     """
@@ -58,7 +43,6 @@ class GraphPU:
                  target,
                  seg_level,
                  expl_level,
-                 min_len_p1_p2,
                  ori_res_num_and_chain_query,
                  ori_res_num_and_chain_target,
                  nb_cpu,
@@ -82,15 +66,15 @@ class GraphPU:
             - ori_res_num_and_chain_query (dict): Mapping of the original residue number and chain(s) of the query to the new numerotation and chain.
             - ori_res_num_and_chain_target (dict): Mapping of the original residue number and chain(s) of the target to the new numerotation and chain.
             - nb_cpu (int): Number of CPUs to use for multiprocessing
-            - opt_prune (float): TM-score threshold to prune TM-align alignments of PUs
-            - seed_alignment (bool): If True, the TM-align alignments are seeded with a
+            - opt_prune (float): TM-score threshold to prune KPAX alignments of PUs
+            - seed_alignment (bool): If True, the KPAX alignments are seeded with a
                                         fixed alignment (used when query and target are the same)
             - smoothed_pu_output (bool): If True, the PUs are trimmed/smoothed for the final textual alignment only
             - sequential (bool): If True, do a sequential alignment: keep paths with consecutive PUs only
         """
 
         __slots__ = ("query", "target", "seg_level", "expl_level", 
-                    "min_len_p1_p2", "nb_cpu", "opt_prune", "seed_alignment"
+                    "nb_cpu", "opt_prune", "seed_alignment",
                     "best_ali", "best_score", "final_alis", "best_path", 
                     "best_gdt2_output", "best_pu_order", "pu_order_text",
                     "pu_range", "all_alis", "query", "target", "seg_level",
@@ -142,7 +126,7 @@ class GraphPU:
         }
         self.build_graph(nb_cpu)
         self.merge_all(nb_cpu)
-        succeeded = self.compute_scores(min_len_p1_p2, nb_cpu, opt_prune, seed_alignment)
+        succeeded = self.compute_scores(nb_cpu, opt_prune, seed_alignment)
         if succeeded:
             # Smooth the positions of the PUs in the best alignments to be able to print them correctly
             # Remove PU positions that are isolated:
@@ -167,7 +151,7 @@ class GraphPU:
             # Move the best aligned query structure to the result directory
             shutil.copy2(self.best_ori_query_renum_pdb, solution_pdb_renum)
             shutil.copy2(self.best_ali, solution_pdb)
-            target_renum_path = os.path.join(TMP_DIR, target.name)
+            target_renum_path = os.path.join(os.environ.get('ICARUS_TMP_DIR'), target.name)
             # Copy the original target and reformat it
             shutil.copy2(target.ori_path, target_renum_path)
             Protein.reformat_struct(target_renum_path)
@@ -287,7 +271,7 @@ class GraphPU:
             else:  # We are not at the root node, we need to get the encoded vector of the previous node
                 encoded_ali = tree_pu_vectors[(node[:-1], int(node[-1]))]
             # Retrieve aligned core positions of the PU on the target
-            aligned_pos = np.asarray([x-1 for x in ali.all_aligned["core_target_aligned_positions"]])
+            aligned_pos = np.asarray([x-1 for x in ali.all_aligned["all_target_aligned_positions"]])
             # Replace positions with id_pu for aligned positions in full vector
             encoded_ali[aligned_pos] = id_pu
             tree_pu_vectors[(node, id_pu)] = encoded_ali
@@ -373,24 +357,30 @@ class GraphPU:
         # The graph explores all possible alignments.
         for level in range(len(self.alis) + 1):
             encoded_pus_at_curr_level = multiprocessing.Manager().dict()
-            with multiprocessing.Pool(processes=nb_cpu) as p:
-                # For each node of the graph, get the alignments to do and
-                # parallelize the actual alignments calculations for successors
-                for node, successors in graph_skeletton[level].items():
-                    nb_alis_done += 1
-                    self.progressbar(nb_alis_done, nb_alis_todo, "Build graph")
-                    # Nodes terminology represents segmentation depth
-                    # Ex: T1, T2, T3 => level 1 ;
-                    # T11, T12, T21, T22, T31, T32 => level 2 ...
-                    # skip non-existant nodes (failed alignment probably)
-                    try:
-                        alis = graph_nodes[node]["alis"]
-                    except KeyError:
-                        continue
-                    args = (graph_edges, graph_nodes, node, successors, alis, encoded_pus_at_curr_level, tree_pu_vectors, init_target_len)
-                    p.apply_async(GraphPU._add_nodes, args)
-                p.close()
-                p.join()
+            with multiprocessing.Pool(processes=nb_cpu, initializer=signal.signal, initargs=(signal.SIGINT, signal.SIG_IGN)) as p:
+                try:
+                    # For each node of the graph, get the alignments to do and
+                    # parallelize the actual alignments calculations for successors
+                    for node, successors in graph_skeletton[level].items():
+                        nb_alis_done += 1
+                        self.progressbar(nb_alis_done, nb_alis_todo, "Build graph")
+                        # Nodes terminology represents segmentation depth
+                        # Ex: T1, T2, T3 => level 1 ;
+                        # T11, T12, T21, T22, T31, T32 => level 2 ...
+                        # skip non-existant nodes (failed alignment probably)
+                        try:
+                            alis = graph_nodes[node]["alis"]
+                        except KeyError:
+                            continue
+                        args = (graph_edges, graph_nodes, node, successors, alis, encoded_pus_at_curr_level, tree_pu_vectors, init_target_len)
+                        p.apply_async(GraphPU._add_nodes, args)
+                    p.close()
+                    p.join()
+                except KeyboardInterrupt:
+                    if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+                        shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'), ignore_errors=True)
+                        print("\nQuitting gracefully, bye !")
+                    sys.exit(0)
             # BRANCH & BOUND
             # For each node at a given level, check if the alignments of successors
             # can be skipped because the order of alignment was already done once.
@@ -539,15 +529,20 @@ class GraphPU:
         paths = multiprocessing.Manager().list()
 
         chunksize = self.calc_chunksize(nb_cpu, len_tot)
-        with multiprocessing.Pool(processes=nb_cpu) as p:
-            func = partial(GraphPU.merge_alis, paths, self.query,
-                           self.target, self.sequential, self.expl_level, self.nb_PUs, self.ori_res_num_and_chain_query)
-            for i, _ in enumerate(
-                    p.imap_unordered(func, self.all_alis, chunksize)):
-                self.progressbar(i + 1, len_tot, "Merge alignments")
-            p.close()
-            p.join()
-
+        with multiprocessing.Pool(processes=nb_cpu, initializer=signal.signal, initargs=(signal.SIGINT, signal.SIG_IGN)) as p:
+            try:
+                func = partial(GraphPU.merge_alis, paths, self.query,
+                            self.target, self.sequential, self.expl_level, self.nb_PUs, self.ori_res_num_and_chain_query)
+                for i, _ in enumerate(
+                        p.imap_unordered(func, self.all_alis, chunksize)):
+                    self.progressbar(i + 1, len_tot, "Merge alignments")
+                p.close()
+                p.join()
+            except KeyboardInterrupt:
+                if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+                    shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'), ignore_errors=True)
+                    print("\nQuitting gracefully, bye !")
+                sys.exit(0)
         # After pruning by TM-score intermediate alignments,
         # some paths may be empty. We remove them.
         for path in paths:
@@ -563,7 +558,7 @@ class GraphPU:
         IT SLOWS DOWN MULTIPROCESSING BY A LOT !
 
         Merge multiple alignments into a single pdb file. Parts merged are taken
-        from the outputs of TM-align ie query protein that were subject to
+        from the outputs of KPAX ie query protein that were subject to
         transformation.
 
         Args:
@@ -583,7 +578,7 @@ class GraphPU:
         # from 1 --> end
         pu_order = GraphPU.get_pu_order_from_target_ascending_pos(alignments)
         suffix = utils.get_random_name()
-        base_path = f"{TMP_DIR}/{query.name}-level_{expl_level}_{nb_PUs}_PUs-on-{target.name}/"
+        base_path = f"{os.environ.get('ICARUS_TMP_DIR')}/{query.name}-level_{expl_level}_{nb_PUs}_PUs-on-{target.name}/"
         os.makedirs(base_path, exist_ok=True)
         merged_pus_path_renum = os.path.join(base_path, f"merged_pus_ali_{suffix}_renum.pdb")
         # Merge the positions of the PUs that aligned to corresponding ascending target positions
@@ -611,7 +606,7 @@ class GraphPU:
             paths.append((merged_pus_path, merged_pus_path_renum, alignments))
         return True
 
-    def run_gdt2(scores, min_len_p1_p2, opt_prune, seed_alignment, target, query):
+    def run_gdt2(scores, opt_prune, seed_alignment, target, query):
         """
         DO NOT PUT "self" TO THIS FUNCTION,
         IT SLOWS DOWN MULTIPROCESSING BY A LOT !
@@ -636,13 +631,14 @@ class GraphPU:
             mode = 1
         else:
             mode = 0
-        # TM-align before calculating the scores with gdt2.pl
+        min_len_p1_p2 = min(query.length, target.length)
+        # KPAX before calculating the scores with gdt2.pl
         ali = Alignment(query, target, opt_prune, seed_alignment)
         if ali.success:
-            path_query_name = f"{TMP_DIR}/{query.name}"
+            path_query_name = f"{os.environ.get('ICARUS_TMP_DIR')}/{query.name}"
             with open(path_query_name, "w") as filout:
                 filout.write(ali.new_query)
-            path_new_target_name = f"{TMP_DIR}/{target.name}_ali_{query.name}"
+            path_new_target_name = f"{os.environ.get('ICARUS_TMP_DIR')}/{target.name}_ali_{query.name}"
             with open(path_new_target_name, "w") as filout:
                 filout.write(ali.new_target)
             command = f"{GDT} -pdb '{path_query_name} {path_new_target_name}' -mode {str(mode)} -len {min_len_p1_p2}"
@@ -661,13 +657,12 @@ class GraphPU:
                     break
             return True
 
-    def compute_scores(self, min_len_p1_p2, nb_cpu, opt_prune, seed_alignment):
+    def compute_scores(self, nb_cpu, opt_prune, seed_alignment):
         """
         Computes all scores using the run_gdt2 function, select best alignment
         and its score and stores it in self.
 
         Args:
-            - min_len_p1_p2 (int): minimum length of the two proteins
             - nb_cpu (int): number of cpu to use
             - opt_prune (float): threshold for pruning
             - seed_alignment (bool): if True, use a seed alignment
@@ -689,12 +684,18 @@ class GraphPU:
 
             # Multiprocessing
             chunksize = self.calc_chunksize(nb_cpu, nb_prots)
-            with multiprocessing.Pool(processes=nb_cpu) as p:
-                func = partial(GraphPU.run_gdt2, scores, min_len_p1_p2, opt_prune, seed_alignment, self.target)
-                for i, _ in enumerate(p.imap_unordered(func, prots, chunksize)):
-                    self.progressbar(i + 1, nb_prots, "Compute scores")
-                p.close()
-                p.join()
+            with multiprocessing.Pool(processes=nb_cpu, initializer=signal.signal, initargs=(signal.SIGINT, signal.SIG_IGN)) as p:
+                try:
+                    func = partial(GraphPU.run_gdt2, scores, opt_prune, seed_alignment, self.target)
+                    for i, _ in enumerate(p.imap_unordered(func, prots, chunksize)):
+                        self.progressbar(i + 1, nb_prots, "Compute scores")
+                    p.close()
+                    p.join()
+                except KeyboardInterrupt:
+                    if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+                        shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'), ignore_errors=True)
+                        print("\nQuitting gracefully, bye !")
+                    sys.exit(0)
             self.best_ali = max(scores.items(), key=lambda x: x[1][0])[0]
             self.best_score = scores[self.best_ali][0]
             self.best_gdt2_output = scores[self.best_ali][1]

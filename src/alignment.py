@@ -17,27 +17,13 @@ from .protein import PU
 
 # When icarus.py is executed, this equals: /path/to/icarus
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TMALIGN = os.path.join(PROJECT_DIR, "bin", "TMalign")
+KPAX = os.path.join(PROJECT_DIR, "bin", "kpax", "bin", "kpax5.1.3.x64")
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 RESULTS_DIR = os.path.join(WORK_DIR, "results")
-TMP_DIR = utils.TMP_DIR
-
-def signal_handler(signal, handler):
-    """
-    Catch CTRL+C signal
-    Clean the tmp directory before stopping
-    """
-    if os.path.exists(TMP_DIR):
-        shutil.rmtree(TMP_DIR, ignore_errors=True)
-        print("\nQuitting gracefully, bye !")
-    sys.exit(0)
-
-# Catch CTRL+C signal and quit gracefully by cleaning traces
-signal.signal(signal.SIGINT, signal_handler)
 class Alignment:
     """
     The purpose of this class in storing paths and informations relative to an
-    alignment realised with the TM-align program.
+    alignment realised with the KPAX program.
     """
 
     def __init__(self, query, target, opt_prune, seed_alignment, save_output=False, keep_ori_resnum=False):
@@ -48,14 +34,14 @@ class Alignment:
             - query (Protein or PU): The query protein or PU to align to the target protein
             - target (Protein or PU): The target protein on which the query will be aligned
             - opt_prune (float): TM-score threshold to prune the alignment
-            - seed_alignment (bool): if True, the TM-align alignments will be fixed with a seed alignment
-            - save_output (bool): if True, the TM-align output PDB will be saved in the icarus_output folder
+            - seed_alignment (bool): if True, the KPAX alignments will be fixed with a seed alignment
+            - save_output (bool): if True, the KPAX output PDB will be saved in the icarus_output folder
 
         Attributes:
             - query (Protein or PU): passed query
             - target (Protein or PU): passed target
             - opt_prune (float): TM-score threshold to prune the alignment
-            - seed_alignment (bool): if True, the TM-align alignments will be fixed with a seed alignment
+            - seed_alignment (bool): if True, the KPAX alignments will be fixed with a seed alignment
             - path (str): path to the generated alignement folder
             - score (float): TM-score associated with the alignment
             - success (bool): True if the alignment was successful
@@ -87,7 +73,7 @@ class Alignment:
         if self.success:
             self._get_match()
             self._get_structures()
-            self.name = self.path.split("/")[-1]
+            self.name = self.path.split("/")[-2]
             self._update_target()
 
     def __repr__(self):
@@ -98,8 +84,10 @@ class Alignment:
 
     def _align(self, query, target, opt_prune):
         """
-        Align a query pdb file to a target pdb file using TM-align
-        and sets the associated TM-score normalized by the shortest sequence.
+        Align a query pdb file onto a target pdb file using KPAX
+        and set the associated TM-score normalized by the shortest sequence.
+        KPAX normalizes by the shortest sequence by default.
+        KPAX aligns the 2nd file on the 1st (which stays rigid)
 
         Args:
             - query, str: path to a query pdb file to superimpose on target file
@@ -111,129 +99,85 @@ class Alignment:
         Attributes:
             - set self.success
             - set self.path
+           
             - set self.score
         """
-        ali = os.path.join(TMP_DIR, f"{query.name}-on-{target.name}")
+        ali = os.path.join(os.environ.get('ICARUS_TMP_DIR'), f"{query.name}-on-{target.name}")
         os.makedirs(ali, exist_ok=True)
-        alignment = f"{ali}/TM-sup"
-        # We want to normalize by the shortest protein.
-        smallest = min(query.length, target.length)
-        # Superimpose query to target with TMalign.
-        # -u option specifies the length to normalize TM_score with
-        opt = [query.path, target.path, "-u", str(smallest), "-o", alignment]
-        fasta_query = ""
-        if self.seed_alignment:
-            # Create the gapped query
-            for i, res_num in enumerate(target.residues_num):
-                if res_num in query.residues_num:
-                    # Since query == target, we can use the residue in the target sequence
-                    # as it is the same as the one in the query sequence (same residue number)
-                    fasta_query += target.seq[i]
-                else:
-                    fasta_query += "-"
-            seed_alignment_file = os.path.join(TMP_DIR, f"seed_alignment_{query.name}_{target.name}")
-            # Write the seed alignment for TM-align
-            with open(seed_alignment_file, "w") as f:
-                f.write(">" + query.name + "\n")
-                f.write(fasta_query + "\n")
-                f.write("\n")
-                f.write(">"+target.name + "\n")
-                f.write(target.seq + "\n")
-            opt += ["-I", seed_alignment_file]
-        output = subprocess.run([TMALIGN] + opt, capture_output=True)
+
+        alignment_query_flex = f"{ali}/kpax_results/{target.name}_query.pdb"
+        alignment_target_flex = f"{ali}/kpax_results/{query.name}_{target.name}.pdb"
+        # Superimpose query to target with KPAX (1st structure is rigid and kpax aligns the 2nd flexibly onto the 1st one).
+        opt = ["-conect", "-nosubdirs", "-nohex", "-novmd", "-nojmol", "-nomatrix",
+               "-nosse", "-nofasta", "-nopir", "-nokrmsd", "-noprofit", "-nohits",
+               "-notops", "-norank", "-norainbow", "-pdb", target.path, query.path]
+        output = subprocess.run([KPAX] + opt, cwd=ali, capture_output=True)
         res = output.stdout.decode("utf-8").split("\n")
         if self.save_output:
-            tmalign_result_filename = query.name + "_on_" + target.name + "_tmalign.pdb"
-            tmalign_result_path = os.path.join(RESULTS_DIR, query.name + "_on_" + target.name, "result_PDBs", tmalign_result_filename)
+            kpax_result_filename = query.name + "_on_" + target.name + "_kpax.pdb"
+            kpax_result_path = os.path.join(RESULTS_DIR, query.name + "_on_" + target.name, "result_PDBs", kpax_result_filename)
             # Create the directory because in special cases it is not yet created
-            os.makedirs(os.path.dirname(tmalign_result_path), exist_ok=True)
-            shutil.copy2(f"{alignment}_all_atm", tmalign_result_path)
-            self.tmalign_result_path = tmalign_result_path
-        to_remove = ("*pml", "*lig", "*all", "*pdb")
+            os.makedirs(os.path.dirname(kpax_result_path), exist_ok=True)
+            with open(alignment_target_flex, "r") as f1, open(alignment_query_flex, "r") as f2, open(kpax_result_path, "w") as f:
+                for line in f1:
+                    f.write(line)
+                for line in f2:
+                    f.write(line)
+            self.kpax_result_path = kpax_result_path
+        to_remove = ("*kpairs", "*kchains", "*kalign", "*kroc", "*kauc","*ktime", "*knames", "*kcode", "*log")
         files = []
         for files_pattern in to_remove:
             for files in Path(ali).glob(files_pattern):
                 files.unlink()
         tm_score = None
-        err = output.stderr.decode("utf-8")
         for line in res:
             # Get TM_score normalized by user-input (shortest length)
-            tm_score_found = re.search(r"TM-score\s*=\s*(\d+\.\d+).*user-specified.*", line)
+            tm_score_found = re.search(r"^\s+1\s+\d+\.\d+\s+\d+\.\d+\s+\d+\.\d+\s+\d+\.\d+\s+(\d+\.\d+).*$", line)
             if tm_score_found:
                 tm_score = round(float(tm_score_found.group(1)), 3)
                 break
-        if "Sequence is too short" in err or tm_score is None:
+        if tm_score < opt_prune or tm_score is None:
             self.success = False
         else:
-            if tm_score < opt_prune:
-                self.success = False
-            else:
-                self.success = True
-                self.path = ali
-                self.score = tm_score
+            self.success = True
+            self.path = ali+"/kpax_results"
+            self.score = tm_score
 
-    def _get_core_matching_residues(self):
+    def _get_all_matching_residues(self):
         """
-        Get the core matching residues between the query and the target from the TM-align output.
-
-        Returns:
-            - core_pu_pos (list): list of the core PU matching residues in the query
-            - core_target_pos (list): list of the core matching residues in the target
-            - all_target_pos (list): list of all the matching residues in the target
-        """
-        core_pu_pos = []
-        core_target_pos = []
-        all_target_pos = []
-        regex = re.compile(r"select\s+(\d+):(.),\s*(\d+):(.)")
-        with open(f"{self.path}/TM-sup", "r") as filin:
-            for line in filin:
-                line = line.strip()
-                res = regex.search(line)
-                # get the core positions
-                if res is not None:
-                    core_pu_pos.append(int(res.group(1)))
-                    core_target_pos.append(int(res.group(3)))
-                # get the residue numbers of all positions in target,
-                # not only the core ones
-                if line.startswith("ATOM") and line[21:22] == 'B':
-                    all_target_pos.append(int(line[22:26].strip()))
-        return core_pu_pos, core_target_pos, all_target_pos
-
-    def _get_all_all_aligned_residues(self, aa_dict, all_target_pos):
-        """
-        Get the list of all the aligned residues after TM-align.
-        Also get the target sequence involved int the alignment with the PU.
+        Get all the aligned residues between the query and the target from the KPAX output.
+        Also get the target sequence involved in the alignment with the PU.
 
         Args:
             - aa_dict (dict): dictionary of amino acids
-            - all_target_pos (list): list of all the matching residues in the target
-            
+
         Returns:
-            - pu_pos (list): list of the PU matching residues in the query
-            - target_pos (list): list of the matching residues in the target
-            -target_seq (str): string of the target sequence
+            - all_target_pos (list): list of all the matching residues in the target
         """
-        pu_pos = []
-        pu_seq = []
         target_pos = []
-        target_seq = []
-        with open(f"{self.path}/TM-sup_all_atm", 'r') as filin:
+        pu_pos = [] # CA only
+        target_pos = []  # CA only
+        pu_seq = ""
+        target_seq = ""
+        with open(f"{self.path}/{self.query.name}_{self.target.name}.wpairs", "r") as filin:
             for line in filin:
-                if line.startswith("ATOM"):
-                    if line[21:22] == 'A':
-                        pos = int(line[22:26].strip())
-                        if (len(pu_pos) != 0 and pu_pos[-1] != pos) or len(pu_pos) == 0:
-                            pu_pos.append(pos)
-                            pu_seq += aa_dict[line[17:20].strip()]
-                    elif line[21:22] == 'B':
-                        pos = int(line[22:26].strip())
-                        # For the target chain, we want only the residues
-                        # that were involved in the TM-align with the PU
-                        if pos in all_target_pos:
-                            if (len(target_pos) != 0 and target_pos[-1] != pos) or len(target_pos) == 0:
-                                target_pos.append(pos)
-                                target_seq += aa_dict[line[17:20].strip()]
-        return pu_pos, pu_seq, target_pos, target_seq
+                line = line.strip()
+                if not line.startswith("#"):
+                    target, query, star = line.split("|")
+                    # Aligned residues
+                    if star.strip() == "*":
+                        q_chain, q_resnum, q_resname = query.strip().split(":")
+                        t_chain, t_resnum, t_resname = target.strip().split(":")
+                        pu_pos.append(int(re.findall(r'\d+', q_resnum)[0]))
+                        target_pos.append(int(re.findall(r'\d+', t_resnum)[0]))
+                        target_seq += t_resname
+                        pu_seq += q_resname
+                    # Not aligned residues
+                    else:
+                        if query.strip() != "-":
+                            q_chain, q_resnum, q_resname = query.strip().split(":")
+                            pu_pos.append(int(q_resnum))
+        return target_pos, pu_pos, pu_seq, target_seq
 
     def _get_match(self):
         """
@@ -246,17 +190,9 @@ class Alignment:
         Attributes:
             - set self.all_aligned
         """
-        aa_dict = {'CYS': 'C', 'ASP': 'D', 'SER': 'S', 'GLN': 'Q', 'LYS': 'K',
-                   'ILE': 'I', 'PRO': 'P', 'THR': 'T', 'PHE': 'F', 'ASN': 'N', 
-                   'GLY': 'G', 'HIS': 'H', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W', 
-                   'ALA': 'A', 'VAL': 'V', 'GLU': 'E', 'TYR': 'Y', 'MET': 'M'}
-        # Get the best core matching residues between query and target according to TM-align
-        core_pu_pos, core_target_pos, all_target_pos = self._get_core_matching_residues()
-        # Get all the atom coordinates of the *best* aligned residues in the query and target
-        pu_pos, pu_seq, target_pos, target_seq = self._get_all_all_aligned_residues(aa_dict, all_target_pos)      
-        self.all_aligned = {"core_pu_aligned_positions": core_pu_pos,
-                            "core_target_aligned_positions": core_target_pos,
-                            "all_pu_aligned_positions": pu_pos,
+        # Get the matching residues and all their atom coordinates between query and target according to KPAX
+        target_pos, pu_pos, pu_seq, target_seq = self._get_all_matching_residues() 
+        self.all_aligned = {"all_pu_aligned_positions": pu_pos,
                             "all_target_aligned_positions": target_pos,
                             "pu_seq": "".join(pu_seq),
                             "target_seq": "".join(target_seq)}
@@ -264,9 +200,13 @@ class Alignment:
     def _get_structures(self):
         """
         Fetch structural conformation of PU or target that have been subject to
-        rotational translation during TM-align.
+        rotational translation during KPAX.
         Stores informations in Alignment.new_query and Alignment.new_target
         variables.
+
+        KPAX flexible alignment means that the query is flexibly aligned onto the rigid target,
+        in the output files we get this naming convention:
+            <query_name>_<target_name>_flex.pdb and the rigid query file <query_name>_query.pdb
 
         Attributes:
             - set self.new_query
@@ -275,10 +215,10 @@ class Alignment:
         new_query = ""
         new_query_dict = {}
         new_target = ""
-        with open(f"{self.path}/TM-sup_all_atm", 'r') as filin:
+        with open(f"{self.path}/{self.query.name}_{self.target.name}.pdb", 'r') as filin:
             for line in filin:
                 line = line.strip()
-                if line.startswith("ATOM") and line[21:22] == 'A':
+                if line.startswith("ATOM"):
                     # This is to have the PU as PDB to align
                     new_query += line[:-1] + ' ' * (81 - len(line)) + "\n"
                     # This is to have the correspondance between the residue number and its PDB line
@@ -286,7 +226,11 @@ class Alignment:
                         new_query_dict[int(line[22:26].strip())].append(line[:-1] + "\n")
                     except KeyError:
                         new_query_dict[int(line[22:26].strip())] = [line[:-1] + "\n"]
-                if line.startswith("ATOM") and line[21:22] == 'B':
+        with open(f"{self.path}/{self.target.name}_query.pdb", 'r') as filin:
+            for line in filin:
+                line = line.strip()
+                if line.startswith("ATOM"):
+                    # This is to have the PU as PDB to align
                     new_target += line[:-1] + ' ' * (81 - len(line)) + "\n"
         self.new_query = new_query
         self.new_query_dict = new_query_dict
@@ -306,9 +250,9 @@ class Alignment:
         Attributes:
             - Set self.updated_target as the path to the updated structure.
         """
-        res_to_del = [res for res in self.all_aligned["core_target_aligned_positions"]]
+        res_to_del = [res for res in self.all_aligned["all_target_aligned_positions"]]
         old_pdb = self.target
-        new_pdb = os.path.join(TMP_DIR, utils.get_random_name() + ".pdb")
+        new_pdb = os.path.join(os.environ.get('ICARUS_TMP_DIR'), utils.get_random_name() + ".pdb")
         with open(old_pdb.path, "r") as filin, open(new_pdb, 'w') as filout:
             for atom in filin:
                 res_nb = int(atom[22:26])
@@ -421,15 +365,15 @@ class Alignment:
             - n_gaps (int): maximum number of gaps authorized between contiguous positions
 
         Returns:
-            - self.all_aligned["smoothed_core_target_aligned_positions"] (list): list of smoothed target positions
+            - self.all_aligned["smoothed_all_target_aligned_positions"] (list): list of smoothed target positions
                 or the original list if no smoothing was required
         """
         # Best path in the graph == best PUs aligned against the target
         smoothed_target_positions = []
         gaps_vect = np.array([])
-        for i in range(len(self.all_aligned["core_target_aligned_positions"]) - 1):
-            t_pos = self.all_aligned["core_target_aligned_positions"][i]
-            t_next_pos = self.all_aligned["core_target_aligned_positions"][i+1]
+        for i in range(len(self.all_aligned["all_target_aligned_positions"]) - 1):
+            t_pos = self.all_aligned["all_target_aligned_positions"][i]
+            t_next_pos = self.all_aligned["all_target_aligned_positions"][i+1]
             # Vector of gaps between positions: [1, 2, 4] --> [0, 1]
             gaps_vect = np.append(gaps_vect, (t_next_pos - t_pos - 1))
         # Get indexes of where there are gaps > `n_gaps` positions
@@ -437,7 +381,7 @@ class Alignment:
         # Smooth only when there are gaps, otherwise keep the original positions
         if len(idx_of_large_gaps) != 0:
             # Take care of the first gap first
-            t_slice = self.all_aligned["core_target_aligned_positions"][:idx_of_large_gaps[0] + 1]
+            t_slice = self.all_aligned["all_target_aligned_positions"][:idx_of_large_gaps[0] + 1]
             # Keep only groups of positions of size `min_contiguous` or more
             if len(t_slice) >= min_contiguous:
                 smoothed_target_positions += t_slice
@@ -446,24 +390,24 @@ class Alignment:
                 for j in range(len(idx_of_large_gaps) - 1):
                     idx = idx_of_large_gaps[j]
                     next_idx = idx_of_large_gaps[j+1]
-                    t_slice = self.all_aligned["core_target_aligned_positions"][idx+1:next_idx + 1]
+                    t_slice = self.all_aligned["all_target_aligned_positions"][idx+1:next_idx + 1]
                     if len(t_slice) >= min_contiguous:
                         smoothed_target_positions += t_slice
             # Take care of the last gap
             # If the gap occurs between the `min_contiguous` before last and last positions
             # then skip since the group won't be `min_contiguous` long
-            if idx_of_large_gaps[-1] != len(self.all_aligned["core_target_aligned_positions"]) - min_contiguous:
-                t_slice = self.all_aligned["core_target_aligned_positions"][idx_of_large_gaps[-1]+1:]
+            if idx_of_large_gaps[-1] != len(self.all_aligned["all_target_aligned_positions"]) - min_contiguous:
+                t_slice = self.all_aligned["all_target_aligned_positions"][idx_of_large_gaps[-1]+1:]
                 if len(t_slice) >= min_contiguous:
                     smoothed_target_positions += t_slice
-            self.all_aligned["smoothed_core_target_aligned_positions"] = smoothed_target_positions
+            self.all_aligned["smoothed_all_target_aligned_positions"] = smoothed_target_positions
             # Case when there are gaps, but when removing the gaps, there is nothing left.
             # Keep the core positions anyway.
             if len(smoothed_target_positions) == 0:
-                self.all_aligned["smoothed_core_target_aligned_positions"] = self.all_aligned["core_target_aligned_positions"]
+                self.all_aligned["smoothed_all_target_aligned_positions"] = self.all_aligned["all_target_aligned_positions"]
         else:
-            self.all_aligned["smoothed_core_target_aligned_positions"] = self.all_aligned["core_target_aligned_positions"]
-        return self.all_aligned["smoothed_core_target_aligned_positions"]
+            self.all_aligned["smoothed_all_target_aligned_positions"] = self.all_aligned["all_target_aligned_positions"]
+        return self.all_aligned["smoothed_all_target_aligned_positions"]
 
     @staticmethod
     def multiple_alignment(query_prot, target_prot, opt_prune, seed_alignment, seg_level=0):

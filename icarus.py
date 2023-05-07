@@ -30,19 +30,16 @@ from src.alignment import Alignment
 # Start monitoring program runtime
 start_time = time.time()
 
-TMP_DIR = utils.TMP_DIR
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 RESULTS_DIR = os.path.join(WORK_DIR, "results")
 PDB_CLEAN_DIR = os.path.join(WORK_DIR, "PDBs_Clean")
 PDB_STAND_DIR = os.path.join(WORK_DIR, "PDBs_Stand")
 GDT = os.path.join(PROJECT_DIR, "bin", "gdt2.pl")
-for path in [WORK_DIR, RESULTS_DIR, TMP_DIR]:
-    if not os.path.exists(path):
-        os.makedirs(path, exist_ok=True)
+
 # Keys=explore level ; values=number of PUs to consider in graph
-INTERVALS = {0: [0], 1: [2, 3], 2: [4, 5], 3: [6], 4: [7], 5: [8]}
-NB_PUS_2_EXPLORE_LEVEL = {0: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 4, 8: 5}
+INTERVALS = {0: [0], 1: [2, 3], 2: [4, 5], 3: [6], 4: [7]}
+NB_PUS_2_EXPLORE_LEVEL = {0: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 4}
 
 
 def signal_handler(signal, handler):
@@ -50,10 +47,13 @@ def signal_handler(signal, handler):
     Catch CTRL+C signal
     Clean the tmp directory before stopping
     """
-    if os.path.exists(TMP_DIR):
-        shutil.rmtree(TMP_DIR, ignore_errors=True)
+    if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+        shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'), ignore_errors=True)
         print("\nQuitting gracefully, bye !")
     sys.exit(0)
+
+# Catch CTRL+C signal and quit gracefully by cleaning traces
+signal.signal(signal.SIGINT, signal_handler)
 
 # Custom objects know their class.
 # Function objects seem to know way too much, including modules.
@@ -78,7 +78,7 @@ def getsize(obj):
     return size
 
 
-def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=False, keep_ori_resnum=False):
+def run_gdt(query, target, seed_alignment, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=False, keep_ori_resnum=False):
     """
     Runs gdt2.pl with input query and target files.
     As gdt requires file to be in current folder, files are copied in
@@ -87,20 +87,19 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num
     Args:
         - query (Protein or PU): query structure used as an input for gdt.pl.
         - target (Protein or PU): target structure used as an input for gdt.pl.
-        - min_len_p1_p2 (int): minimum length of the query and target sequences.
+        - seed_alignment (bool): if True, seed alignment is used to fix the KPAX
         - opt_prune (int): optional pruning by TM-score threshold.
-        - seed_alignment (bool): if True, seed alignment is used to fix the TM-align
         - save_output (bool): if True, gdt2.pl output is saved in a file.
-        - keep_ori_resnum (bool): if True, original residue numbers are kept in the TM-align PDB output.
+        - keep_ori_resnum (bool): if True, original residue numbers are kept in the KPAX PDB output.
 
     Returns:
         - score (float): TM-score normalized by length of shortest structure.
     """
+    mode = 0
     if seed_alignment:
         mode = 1
-    else:
-        mode = 0
-    # TM-align before calculating the scores with gdt2.pl
+    min_len_p1_p2 = min(query.length, target.length)
+    # KPAX before calculating the scores with gdt2.pl
     # use the original query and target residues numbers
     ali = Alignment(query, target, opt_prune, seed_alignment, save_output, keep_ori_resnum)
     with open(query.name, "w") as filout:
@@ -111,16 +110,18 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num
     cmd_args = shlex.split(command)
     # execution of gdt2.pl
     output = subprocess.run(cmd_args, capture_output=True, check=True)
-    os.remove(f"{query.name}")
-    os.remove(f"{target.name}")
+    if os.path.exists(query.name):
+        os.remove(f"{query.name}")
+    if os.path.exists(target.name):
+        os.remove(f"{target.name}")
     output = output.stdout.decode("utf-8")
     if save_output:
-        # For cases when we want to launch TM-align and keep the original residue numbers and chain names
+        # For cases when we want to launch KPAX and keep the original residue numbers and chain names
         if keep_ori_resnum:
-            utils.renum_ori_pdb_resnum_tmalign(ali.tmalign_result_path, ori_res_num_and_chain1, ori_res_num_and_chain2)
+            utils.renum_ori_pdb_resnum_kpax(ali.kpax_result_path, ori_res_num_and_chain1, ori_res_num_and_chain2)
         base_path = os.path.join(RESULTS_DIR, query.name + "_on_" + target.name)
         os.makedirs(base_path, exist_ok=True)
-        with open(f"{base_path}/tmalign_{query.name}_vs_{target.name}.txt", "w") as filout:
+        with open(f"{base_path}/gdt_{query.name}_vs_{target.name}.txt", "w") as filout:
             filout.write(output)
     output = output.split("\n")
     tm_scores = []
@@ -136,7 +137,6 @@ def run_gdt(query, target, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num
 
 def main(p1,
          p2,
-         min_len_p1_p2,
          exploration_level,
          exploration_level_p1,
          exploration_level_p2,
@@ -156,7 +156,6 @@ def main(p1,
     Args:
         - p1 (Protein): One of the two protein to align.
         - p2 (Protein): The other protein to align.
-        - min_len_p1_p2 (int): Length of the smallest sequence between query and target sequences
         - exploration_level (int): Exploration level requested by the user
         - exploration_level_p1 (int): If not None, represents the new maximum exploration level
                                       for the protein 1 because the original exploration level
@@ -165,7 +164,7 @@ def main(p1,
                                       for the protein 2 because the original exploration level
                                       was not adapted (too high)
         - opt_prune (int): optional pruning by TM-score threshold.
-        - seed_alignment (bool): if True, seed alignment is used to fix the TM-align
+        - seed_alignment (bool): if True, seed alignment is used to fix the KPAX
         - smoothed_pu_output (bool): if True, the output of the PU is smoothed
         - ori_res_num_and_chain1 (dict): original number of residues and chain(s) of protein 1
         - ori_res_num_and_chain2 (dict): original number of residues and chain(s) of protein 2
@@ -208,18 +207,19 @@ def main(p1,
     results.append("                                                    ======\n")
     results.append(f" *  {p1.name} against {p2.name}")
     print(f"\n\nAligning {p1.name} against {p2.name}", end="")
-    if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, we only do a TM-align
-        results.append(f" └── level 0 | 0 PUs (plain TM-align): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
+    single_kpax_tmscore = run_gdt(p1, p2, seed_alignment, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)
+    if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, or the tmscore is high enough, we only do a KPAX
+        results.append(f" └── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         textual_alignment_p1_vs_p2 = ""
         print("\n")
     else:
-        results.append(f" ├── level 0 | 0 PUs (plain TM-align): {run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, keep_ori_resnum=True)}")
+        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         for level in range(g.GraphPU.max_seg_level_p1):
             nb_pu_at_level = len(p1.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
             print(f"\n\nSOLUTION {solutions_cnt}: {p1.name} [level {expl_level} => {nb_pu_at_level} PUs] vs {p2.name}")
             print(f"{56*'-'}")  # for aesthetic purposes
-            graph = g.GraphPU(p1, p2, level + 1, expl_level, min_len_p1_p2, ori_res_num_and_chain1, ori_res_num_and_chain2, nb_cpu, opt_prune, seed_alignment, smoothed_pu_output, sequential)
+            graph = g.GraphPU(p1, p2, level + 1, expl_level, ori_res_num_and_chain1, ori_res_num_and_chain2, nb_cpu, opt_prune, seed_alignment, smoothed_pu_output, sequential)
             if graph.succeeded:
                 scores.append([graph.best_score, graph.pu_order_text, graph.best_ali, "1"])
                 # aesthetics: last line to write
@@ -253,17 +253,18 @@ def main(p1,
     results.append("                                                    SCORES")
     results.append("                                                    ======\n")
     results.append(f" *  {p2.name} against {p1.name}")
-    if exploration_level_p2 == 0:  # Peeling coudn't find any PU on the protein, we only do a TM-align
-        results.append(f" └── level 0 | 0 PUs (plain TM-align): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
+    single_kpax_tmscore = run_gdt(p2, p1, seed_alignment, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)
+    if exploration_level_p1 == 0:  # Peeling coudn't find any PU on the protein, or the tmscore is high enough, we only do a KPAX
+        results.append(f" └── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         textual_alignment_p2_vs_p1 = ""
     else:
-        results.append(f" ├── level 0 | 0 PUs (plain TM-align): {run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, keep_ori_resnum=True)}")
+        results.append(f" ├── level 0 | 0 PUs (plain KPAX): {single_kpax_tmscore}")
         for level in range(g.GraphPU.max_seg_level_p2):
             nb_pu_at_level = len(p2.PUs_per_level[level])
             expl_level = NB_PUS_2_EXPLORE_LEVEL[nb_pu_at_level]
             print(f"\n\nSOLUTION {solutions_cnt}: {p2.name} [level {expl_level} => {nb_pu_at_level} PUs] vs {p1.name}")
             print(f"{56*'-'}")  # for aesthetic purposes
-            graph = g.GraphPU(p2, p1, level + 1, expl_level, min_len_p1_p2, ori_res_num_and_chain2, ori_res_num_and_chain1, nb_cpu, opt_prune, seed_alignment, smoothed_pu_output, sequential)
+            graph = g.GraphPU(p2, p1, level + 1, expl_level, ori_res_num_and_chain2, ori_res_num_and_chain1, nb_cpu, opt_prune, seed_alignment, smoothed_pu_output, sequential)
             if graph.succeeded:
                 scores.append([graph.best_score, graph.pu_order_text, graph.best_ali, "2"])
                 # aesthetics: last line to write
@@ -276,9 +277,6 @@ def main(p1,
             textual_alignment_p2_vs_p1 = draw_textual_alignment(p2, p1, graph, ori_res_num_and_chain2, smoothed_pu_output)
             results.append(textual_alignment_p2_vs_p1)
     results += "\n"
-    base_path = os.path.join(RESULTS_DIR, p1.name + "_and_" + p2.name)
-    if os.path.exists(base_path):
-        print(f"\n\nINFO: Overwriting existing results at {base_path}\n")
     os.makedirs(base_path, exist_ok=True)
 
     print("\n\n")
@@ -314,9 +312,9 @@ def main(p1,
         print("\n\n\033[93mVERBOSE MODE: show all intermediate exploration levels scores and best alignments for P1 vs P2 and P2 vs P1\033[0m")
         print("              \033[93mBest overall results are shown at the end.\033[0m\n")
         print("\n".join(results))
-        # Saving output of simple TM-align alignment
-        run_gdt(p1, p2, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=True, keep_ori_resnum=True)
-        run_gdt(p2, p1, min_len_p1_p2, opt_prune, seed_alignment, ori_res_num_and_chain2, ori_res_num_and_chain1, save_output=True, keep_ori_resnum=True)
+        # Saving output of simple KPAX alignment
+        run_gdt(p1, p2, seed_alignment, opt_prune, ori_res_num_and_chain1, ori_res_num_and_chain2, save_output=True, keep_ori_resnum=True)
+        run_gdt(p2, p1, seed_alignment, opt_prune, ori_res_num_and_chain2, ori_res_num_and_chain1, save_output=True, keep_ori_resnum=True)
         dest1 = os.path.join(base_path, f"{p1.name}_on_{p2.name}")
         dest2 = os.path.join(base_path, f"{p2.name}_on_{p1.name}")
         if os.path.exists(dest1):
@@ -325,18 +323,20 @@ def main(p1,
         if os.path.exists(dest2):
             print(f"INFO: Overwriting {p2.name} vs. {p1.name} results\n")
             shutil.rmtree(dest2)
-        shutil.move(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}", dest1)
-        shutil.move(f"{RESULTS_DIR}/{p2.name}_on_{p1.name}", dest2)
+        if os.path.exists(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}"):
+            shutil.move(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}", dest1)
+        if os.path.exists(f"{RESULTS_DIR}/{p2.name}_on_{p1.name}"):
+            shutil.move(f"{RESULTS_DIR}/{p2.name}_on_{p1.name}", dest2)
         print("\n\n\n\n\n\t\tGLOBAL BEST\n\n"+best)
-        with open(f"{base_path}/summary.txt", "w") as filin:
+        with open(f"{base_path}/summary.txt", "a") as filin:
             filin.write("\n".join(results))
-            filin.write("\n\n\n\n\n\t\tGLOBAL BEST\n\n"+best)
+            filin.write("\n\n\n\n\n\t\tGLOBAL BEST\n\n"+best_for_file)
             filin.write(f"Results can be found here:\n--> {dest1}\n--> {dest2}\n")
         print(f"Results can be found here:\n--> {dest1}\n--> {dest2}\n")
     else:
         print("\n")
         print(best)
-        with open(f"{base_path}/summary.txt", "w") as filin:
+        with open(f"{base_path}/summary.txt", "a") as filin:
             filin.write(best_for_file)
         if os.path.exists(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}"):
             shutil.rmtree(f"{RESULTS_DIR}/{p1.name}_on_{p2.name}")
@@ -1132,7 +1132,7 @@ def set_exploration_limits(prot, nb_pus_requested, exploration_level):
     max_seg_level = None
     if len(prot.PUs_per_level) == 0:
         print(f"\n* {prot.name}")
-        print(f"   - Protein Peeling program could not find any PU in {prot.name}. ICARUS will only perform a simple TM-align when {prot.name} is used as the query")
+        print(f"   - Protein Peeling program could not find any PU in {prot.name}. ICARUS will only perform a simple KPAX when {prot.name} is used as the query")
         max_seg_level = 0
         exploration_level = 0
     else:
@@ -1217,8 +1217,8 @@ def clean_input_pdb_files(path1, path2, chain1, chain2):
     # - Check if it is a legitimate amino acids PDB
     ori_res_num_and_chain1 = {}
     ori_res_num_and_chain2 = {}
-    new_path1 = os.path.join(TMP_DIR, os.path.basename(path1))
-    new_path2 = os.path.join(TMP_DIR, os.path.basename(path2))
+    new_path1 = os.path.join(os.environ.get('ICARUS_TMP_DIR'), os.path.basename(os.path.splitext(path1)[0]))
+    new_path2 = os.path.join(os.environ.get('ICARUS_TMP_DIR'), os.path.basename(os.path.splitext(path2)[0]))
     len1 = utils.reformat_struct(path1, ori_res_num_and_chain1, chain1, new_path = new_path1)
     len2 = utils.reformat_struct(path2, ori_res_num_and_chain2, chain2, new_path = new_path2)
     print("done\n")
@@ -1264,10 +1264,10 @@ def parse_arguments():
         """
         Check if the user input chain is valid
         """
-        if chain.isalpha() and len(chain) == 1:
+        if (chain.isalpha() or chain.isdigit()) and len(chain) == 1:
             return chain
         raise argparse.ArgumentTypeError(
-            "Error option -a/--chain: PDB chain should be a single alphabetic character [A-B]")
+            "Error option -a/--chain: PDB chain should be a single alphabetic or digit character [a-zA-Z0-9]")
 
     def check_pu_size(size):
         """
@@ -1392,8 +1392,7 @@ def parse_arguments():
                                 1 -> [2, 3],
                                 2 -> [4, 5],
                                 3 -> 6,
-                                4 -> 7,
-                                5 -> 8'''),
+                                4 -> 7'''),
         default=2,
         type=check_exploration_level)
     optional.add_argument(
@@ -1401,7 +1400,7 @@ def parse_arguments():
         "--prune",
         help=textwrap.dedent('''\
                             The pruning threshold corresponds to a TM-score value
-                            used to filter the TM-align between Protein Units and the target protein.
+                            used to filter the KPAX between Protein Units and the target protein.
                             If an alignment is below this threshold, it will be pruned from the graph.
                             A high pruning threshold (TM-score value) will filter out more solutions
                             whereas a low one will prune less solutions.
@@ -1415,7 +1414,7 @@ def parse_arguments():
         help=textwrap.dedent('''\
                             In the case when both input PDBs have identical amino acid sequences
                             but differ in 3D, setting this option will make sure that
-                            all alignments by TM-align will be assigned to avoid any displacement.
+                            all alignments by KPAX will be assigned to avoid any displacement.
                             This is useful for instance in the case of an analysis of structures inside a
                             dynamics simulations. Default is not set'''),
         action="store_true",
@@ -1425,7 +1424,7 @@ def parse_arguments():
         "--no-seed-alignment",
         help=textwrap.dedent('''\
                             Force the flexible alignment of identical amino acid sequences 
-                            without setting a seed alignment for TM-align. Default is not set'''),
+                            without setting a seed alignment for KPAX. Default is not set'''),
         action="store_true",
         default=False)
     optional.add_argument(
@@ -1466,12 +1465,27 @@ def parse_arguments():
                                           intermediate results and alignments'''),
         action="store_true",
         default=False)
+    optional.add_argument(
+        "-u",
+        "--use-ramfs",
+        help=textwrap.dedent('''\
+                        Use the native TMPFS partition /dev/shm on linux systems to boost i/o perfs.
+                        This may use a large amount of RAM if proteins are large e.g. > 200 residues'''),
+        action="store_true",
+        default=False)
     args = parser.parse_args()
     return args
 
 if __name__ == "__main__":
     # Parse CLI arguments
     args = parse_arguments()
+
+    os.environ['USE_RAMFS'] = '1' if args.use_ramfs is True else '0'
+    utils.set_tmp_dir()
+    TMP_DIR = os.environ.get('ICARUS_TMP_DIR')
+    for path in [WORK_DIR, RESULTS_DIR, TMP_DIR]:
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
 
     # Set variables
     p.Protein.seg_size = args.min_size
@@ -1505,7 +1519,6 @@ if __name__ == "__main__":
     p2 = p.Protein(new_path2, ori_path=path2, min_len_pu=min_len_pu2)
     p2.set_1d_seq()
     print(f"\n    {p2.length} aa\n    Seq: {p2.seq}")
-    min_len_p1_p2 = min(p1.length, p2.length)
     max_len_p1_p2 = max(p1.length, p2.length)
     nb_pus_requested = INTERVALS[exploration_level]
     exploration_level_p1 = None
@@ -1522,6 +1535,11 @@ if __name__ == "__main__":
     elif not seed_alignment and no_seed_alignment and p1.seq == p2.seq:
         print("\nForcing no seed alignment even though input sequences are identical. (This may result in poorer alignment).")
 
+    base_path = os.path.join(RESULTS_DIR, p1.name + "_and_" + p2.name)
+    if os.path.exists(base_path):
+        print(f"\n\nWARNING: Overwriting existing results at {base_path}\n")
+        shutil.rmtree(base_path)
+
     # Set limits for Protein 1
     exploration_level_p1, g.GraphPU.max_seg_level_p1 = set_exploration_limits(p1, nb_pus_requested, args.exploration_level)
 
@@ -1530,15 +1548,14 @@ if __name__ == "__main__":
 
     large_job_warning(max_len_p1_p2, exploration_level_p1, exploration_level_p2, force)
 
-    main(p1, p2, min_len_p1_p2, exploration_level,
+    main(p1, p2, exploration_level,
         exploration_level_p1, exploration_level_p2,
         opt_prune, seed_alignment, smoothed_pu_output,
         ori_res_num_and_chain1, ori_res_num_and_chain2, sequential, nb_cpu, verbose)
 
     # Add program runtime to terminal output and summary.txt
-    base_path = os.path.join(RESULTS_DIR, p1.name + "_and_" + p2.name, "summary.txt")
     runtime = time.time() - start_time
     print("Total runtime: {:.1f} seconds".format(runtime))
-    with open(base_path, "a") as f_out:
+    with open(os.path.join(base_path, "summary.txt"), "a") as f_out:
         f_out.write("Total runtime: {:.1f} seconds".format(runtime))
     utils.clean()

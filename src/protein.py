@@ -9,8 +9,12 @@ import subprocess
 import sys
 import signal
 import numpy as np
+import warnings
 from collections import OrderedDict
-from prody import *
+from Bio import BiopythonDeprecationWarning
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", BiopythonDeprecationWarning)
+    from prody import *
 confProDy(verbosity='none')
 
 import src.utils as utils
@@ -21,20 +25,6 @@ SWORD = os.path.join(PROJECT_DIR, "bin", "SWORD")
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 PDB_CLEAN_DIR = os.path.join(WORK_DIR, "PDBs_Clean")
 PDB_STAND_DIR = os.path.join(WORK_DIR, "PDBs_Stand")
-TMP_DIR = utils.TMP_DIR
-
-def signal_handler(signal, handler):
-    """
-    Catch CTRL+C signal
-    Clean the tmp directory before stopping
-    """
-    if os.path.exists(TMP_DIR):
-        shutil.rmtree(TMP_DIR, ignore_errors=True)
-        print("\nQuitting gracefully, bye !")
-    sys.exit(0)
-
-# Catch CTRL+C signal and quit gracefully by cleaning traces
-signal.signal(signal.SIGINT, signal_handler)
 
 class Protein:
     """
@@ -101,11 +91,10 @@ class Protein:
         else:
             self.path = path
             # get last part of path i.e name
-            self.name = os.path.basename(path)[:-4]
+            self.name = os.path.basename(os.path.splitext(path)[0])
         self._set_length()
         if peel:
             PUs = self._set_PUs()
-            self.name = self.name[:-4]
             for level, pus in enumerate(PUs):
                 id_pu = 1
                 self.PUs_per_level[level] = {}
@@ -171,7 +160,7 @@ class Protein:
         # Build sublist of PUs for each segmentation level
         for pdb in sorted_pdbs:
             # first number encountered is the segmentation level
-            search = re.search(r"_(\d+)_\d+_\d+", pdb)
+            search = re.search(r"_(\d+)_\d+_\d+.pdb", pdb)
             seg_levels.append(int(search.group(1)))
         for level in set(seg_levels):
             # add empty sub list for each segmentation level
@@ -277,7 +266,7 @@ class PU(Protein):
             raise OSError("'{}': No such file or directory".format(path))
         self.path = path
         self.name = path.split("/")
-        self.name = "{}-{}".format(self.name[-3][:-4], self.name[-1][:-4])
+        self.name = "{}".format(self.name[-1][:-4])
         # Get PU start and end from Protein Peeling output
         search = re.search(r"_(\d+)_(\d+)$", self.name)
         if search:

@@ -20,22 +20,28 @@ def get_random_name():
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK_DIR = os.path.join(os.getcwd(), "icarus_output")
 plt = platform.system()
-# Use the native tmpfs partition on linux systems to boost i/o perfs 
-if plt == "Linux":
-    TMP_DIR = os.path.join("/dev/shm", get_random_name())
-# Use default /tmp directory because not tmpfs partition on Mac or other OS
-elif plt == "Darwin" or not os.path.exists("/dev/shm"):
-    TMP_DIR = os.path.join("/tmp", get_random_name())
+
+def set_tmp_dir():
+    """
+        Create working directory, either in the /dev/shm tmpfs for faster i/o,
+        of in /tmp.
+    """
+    # Use default /tmp directory because not tmpfs partition on Mac or other OS
+    os.environ["ICARUS_TMP_DIR"] = os.path.join("/tmp", get_random_name())
+    if os.environ.get('USE_RAMFS') == '1' and plt == "Linux":
+        # Use the native tmpfs partition on linux systems to boost i/o perfs 
+        os.environ["ICARUS_TMP_DIR"] = os.path.join("/dev/shm", get_random_name())
+
 
 def clean():
     """
     Clean working dir in /dev/shm/<random> or /tmp/<random> folder.
     """
     try:
-        if os.path.exists(TMP_DIR):
-            shutil.rmtree(TMP_DIR)
+        if os.path.exists(os.environ.get('ICARUS_TMP_DIR')):
+            shutil.rmtree(os.environ.get('ICARUS_TMP_DIR'))
     except OSError as e:
-        print("Failed to delete tmp dir '%s'. Reason: %s" % (TMP_DIR, e))
+        print("Failed to delete tmp dir '%s'. Reason: %s" % (os.environ.get('ICARUS_TMP_DIR'), e))
 
 
 def product(liste):
@@ -161,14 +167,24 @@ def reformat_struct(path, ori_res_num_and_chain, chain, new_path=""):
     new_chain_name = "A"
     # Use OrderedDict() objects to remember the order of residues insertion in the dictionary
     resnum_to_res = OrderedDict()
+    flag_ins_code = False
     with open(path, "r") as filin:
         for line in filin:
             if line.startswith("ATOM"):
                 new_atm_num += 1
                 old_res_num = int(line[22:26])
+                insert_code = line[26:27]
                 atm_name = line[12:16].strip()
                 res_name = line[17:20].strip()
                 chain_name = line[21:22].strip()
+                # Remove insertion code
+                if insert_code != " ":
+                    line = line[:26] + " " + line[27:]
+                    if not flag_ins_code:
+                        print(f"\n\nWARNING: Insertion code detected and removed for protein at: {path}.")
+                        flag_ins_code = True
+                if chain_name == "":
+                    chain_name = "A" 
                 alter_pos = line[16:17]
                 if (alter_pos == " " or alter_pos == "A") and chain_name == chain:
                     try:
@@ -261,9 +277,9 @@ def renum_ori_pdb_resnum(path, ori_res_num_and_chain, new_path=None):
                 filout.write(atom)
 
 
-def renum_ori_pdb_resnum_tmalign(path, ori_res_num_and_chain1, ori_res_num_and_chain2):
+def renum_ori_pdb_resnum_kpax(path, ori_res_num_and_chain1, ori_res_num_and_chain2):
     """
-    Write the original residue number of each residue for both query and target in the TM-align result output.
+    Write the original residue number of each residue for both query and target in the KPAX result output.
 
     Args:
         - path (str): path to the PDB file
