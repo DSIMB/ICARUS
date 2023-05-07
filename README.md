@@ -65,21 +65,30 @@ conda activate icarus
 
 ```
 $ ./icarus.py --help
-usage: icarus.py [-h] -p1 PROTEIN1 -p2 PROTEIN2 [-s MIN_SIZE] [-l EXPLORATION_LEVEL] [-f] [-v]
+usage: icarus.py [-h] -p1 PROTEIN1 -p2 PROTEIN2 [-m MIN_SIZE] [-c1 CHAIN1] [-c2 CHAIN2] [-l EXPLORATION_LEVEL] [-p PRUNE] [-s | -n] [-t] [-e] [-f] [-c CPU] [-v] [-u]
 
 Icarus is a flexible structural alignment program.
 It takes as input 2 pdb files and returns the optimal
 alignment based on different protein exploration levels.
 
-optional arguments:
-  -h, --help            show this help message and exit
+required arguments:
   -p1 PROTEIN1, --protein1 PROTEIN1
                         Path to the first protein to align
   -p2 PROTEIN2, --protein2 PROTEIN2
                         Path to the second protein to align
-  -s MIN_SIZE, --min-size MIN_SIZE
+
+optional arguments:
+  -m MIN_SIZE, --min-size MIN_SIZE
                         Minimum size of Protein Units (PUs).
                         Must be 15 <= min <= 99, default 15
+  -c1 CHAIN1, --chain1 CHAIN1
+                        PDB Chain of the query.
+                        Single alphabetical character [A-B].
+                        Default is chain A.
+  -c2 CHAIN2, --chain2 CHAIN2
+                        PDB Chain of the target.
+                        Single alphabetical character [A-B].
+                        Default is chain A.
   -l EXPLORATION_LEVEL, --exploration-level EXPLORATION_LEVEL
                         The exploration level determines up to how many PUs to
                         consider to build the graph of solutions.
@@ -96,17 +105,44 @@ optional arguments:
                           1 -> [2, 3],
                           2 -> [4, 5],
                           3 -> 6,
-                          4 -> 7,
-                          5 -> 8
+                          4 -> 7
+  -p PRUNE, --prune PRUNE
+                        The pruning threshold corresponds to a TM-score value
+                        used to filter the KPAX between Protein Units and the target protein.
+                        If an alignment is below this threshold, it will be pruned from the graph.
+                        A high pruning threshold (TM-score value) will filter out more solutions
+                        whereas a low one will prune less solutions.
+                        Default value is no pruning (0.).
+  -s, --seed-alignment  In the case when both input PDBs have identical amino acid sequences
+                        but differ in 3D, setting this option will make sure that
+                        all alignments by KPAX will be assigned to avoid any displacement.
+                        This is useful for instance in the case of an analysis of structures inside a
+                        dynamics simulations. Default is not set
+  -n, --no-seed-alignment
+                        Force the flexible alignment of identical amino acid sequences
+                        without setting a seed alignment for KPAX. Default is not set
+  -t, --smoothed-pu-output
+                        If this option is set, the Protein Units (PUs) that were aligned to the target protein
+                        are smoothed / trimmed to keep only the "core" aligned position.
+                        This option only changes the final presentation of the textual alignment for "visual"
+                        purposes. The output PDB files contain all the residues. Default is not set
+  -e, --sequential      If this option is set, the program considers only solutions with consecutive Protein Units.
+                        Either ascending or descending order.
   -f, --force           Bypass asking user confirmation for exploration level >= 4
+  -c CPU, --cpu CPU     How many CPUs to use. Default all (0). Max on this computer is: 32
   -v, --verbose         Set verbose mode: print longer output and generate
                                           intermediate results and alignments
+  -u, --use-ramfs       Use the native TMPFS partition /dev/shm on linux systems to boost i/o perfs.
+                        This may use a large amount of RAM if proteins are large e.g. > 200 residues
 
-Explanations of ICARUS output:
+Explanations of ICARUS output.
+
+ICARUS generates results in a directory named 'icarus_output'
+in the directory from which you launch ICARUS.
 
 Non-verbose output
 ------------------
-work/results/query_and_target:
+./icarus_output/results/query_and_target:
  ├── solution1_query-on-target-level_X_N_PUs.pdb
  └── summary.txt (terminal textual output)
 
@@ -124,55 +160,53 @@ See the README for detailed information on verbose output
 ```
 Clean input PDB files ... done
 
-Peel d1adl__.ent:
+Peel d1adl__:
     131 aa
     Seq: CDAFVGTWKLVSSENFDDYMKEVGVGFATRKVAGMAKPNMIISVNGDLVTIRSESTFKNTEISFKLGVEFDEITADDRKVKSIITLDGGALVQVQKWDGKSTTIKRKRDGDKLVVECVMKGVTSTRVYERA
-Peel d1mup__.ent:
+Peel d1mup__:
     157 aa
     Seq: EEASSTGRNFNVEKINGEWHTIILASDKREKIEDNGNFRLFLEQIHVLENSLVLKFHTVRDEECSELSMVADKTEKAGEYSVTYDGFNTFTIPKTDYDNFLMAHLINEKDGETFQLMGLYGREPDLSSDIKERFAQLCEEHGILRENIIDLSNANRC
 
 
+Aligning d1adl__ against d1mup__
 
-
-d1adl__ level 1 vs d1mup__, 3 PUs
+SOLUTION 1: d1adl__ [level 1 => 3 PUs] vs d1mup__
 --------------------------------------------------------
 Build graph      [##############################] [100%]
 Merge alignments [##############################] [100%]
 Compute scores   [##############################] [100%]
 
-d1adl__ level 2 vs d1mup__, 4 PUs
+SOLUTION 2: d1adl__ [level 2 => 4 PUs] vs d1mup__
 --------------------------------------------------------
 Build graph      [##############################] [100%]
 Merge alignments [##############################] [100%]
 Compute scores   [##############################] [100%]
 
-d1adl__ level 2 vs d1mup__, 5 PUs
+SOLUTION 3: d1adl__ [level 2 => 5 PUs] vs d1mup__
 --------------------------------------------------------
 Build graph      [##############################] [100%]
 Merge alignments [##############################] [100%]
 Compute scores   [##############################] [100%]
 
-d1mup__ level 1 vs d1adl__, 3 PUs
+Aligning d1mup__ against d1adl__
+
+SOLUTION 4: d1mup__ [level 1 => 3 PUs] vs d1adl__
 --------------------------------------------------------
 Build graph      [##############################] [100%]
 Merge alignments [##############################] [100%]
 Compute scores   [##############################] [100%]
 
-d1mup__ level 2 vs d1adl__, 4 PUs
+SOLUTION 5: d1mup__ [level 2 => 4 PUs] vs d1adl__
 --------------------------------------------------------
 Build graph      [##############################] [100%]
 Merge alignments [##############################] [100%]
 Compute scores   [##############################] [100%]
 
-d1mup__ level 2 vs d1adl__, 5 PUs
+SOLUTION 6: d1mup__ [level 2 => 5 PUs] vs d1adl__
 --------------------------------------------------------
 Build graph      [##############################] [100%]
 Merge alignments [##############################] [100%]
 Compute scores   [##############################] [100%]
-
-INFO: Overwriting existing results at /home/republique/cretin/PROJECTS/icarus/icarus_output/results/d1adl___and_d1mup__
-
-
 
 
 **************************************************************************************************************
@@ -184,9 +218,9 @@ There is only 1 optimal solution for this alignment:
 
 
                                                  SOLUTION 3
-                                                 **********
+                                                 ==========
 
- *  Score: 0.721
+ *  Score: 0.719
     Query: d1adl__
      ├── PU order:     PU1 |     PU2 |     PU3 |     PU4 |     PU5 |
      └── Regions :    1-22 |   23-37 |   38-64 |  65-105 | 106-131 |
@@ -194,57 +228,57 @@ There is only 1 optimal solution for this alignment:
      └── Sequence length : 157
 
                                                 ALIGNED PU(S)
-                                                -------------
+                                                =============
 
-PU 1     :CDAFVGTWKLVSSEN--F-DD---YMKE
-          :||||||||||||||    |
-TARGET   :VEKINGEWHTIILASDKREKIEDNGNFR
-ali. pos. 12                         39
-ori. pos. 1                          22
+PU 1     :CDAFVGTWKLVSSEN--FDDY---MKE
+          ||:||||||||||||   :.
+TARGET   :VEKINGEWHTIILASDKREKIEDNGNF
+ali. pos. 12                        38
+ori. pos. 1                         22
 
 PU 2     :VGVGFATRKVAGMAK
-          .|||||||||||||.
+          :|||||||||||||:
 TARGET   :PDLSSDIKERFAQLC
-ali. pos. 126           140
+ali. pos. 130           144
 ori. pos. 23            37
 
 PU 3     :PNMIISVNGDLVTIRSES----TFKNTEISF
-            ||||||||||||||.      .||||||:
+          ..:|||||||||||||:.    .:||||||:
 TARGET   :FLEQIHVLENSLVLKFHTVRDEECSELSMVA
 ali. pos. 41                            71
 ori. pos. 38                            64
 
-PU 4     :K--LGVEFDEITADDRKVKSII-TLDG-GALVQVQKWD----GKSTTIK
-               |||||:.  ::|||||| .|.  .|||||||:.    .||||||
-TARGET   :KTEKAGEYSVTY--DGFNTFTIPKTDYDNFLMAHLINEKDGETFQLMGL
-ali. pos. 73                                              121
-ori. pos. 65                                              105
+PU 4     :K-----LGVEFDEITADDRKVKSIITLDGG------ALVQVQKWDGKSTTIK
+          .      |:||||      .||||||||::      ||||||||||||||||
+TARGET   :DKTEKAGEYSVTY------DGFNTFTIPKTDYDNFLMAHLINEKDGETFQLM
+ali. pos. 72                                                 123
+ori. pos. 65                                                 105
 
-PU 5     :RKRDGDKLVVECVMKGVT--STRV--YERA
-                       .|.|.  |::|  :.||
+PU 5     :RKRDGDKLVVECVMKGVT-STRVY---ERA
+                       .: .  .||||   :|:
 TARGET   :-----------EEHGILRENIIDLSNANRC
-ali. pos. 141                          170
+ali. pos. 145                          174
 ori. pos. 106                          131
 
                                                 BEST ALIGNMENT
-                                                --------------
+                                                ==============
 
 PUs      :                      PU1                            PU3                                      PU4
-ori. pos.:           ┌1                       22┐ ┌38                         64┐ ┌65
-connect  :           +--------------------------+ +-----------------------------+ +---------------------------
-QUERY    :           CDAFVGTWKLVSSEN--F-DD---YMKE-PNMIISVNGDLVTIRSES----TFKNTEISF-K--LGVEFDEITADDRKVKSII-TLDG-
-match    :           :||||||||||||||    |           ||||||||||||||.      .||||||:      |||||:.  ::|||||| .|.
-TARGET   :EEASSTGRNFNVEKINGEWHTIILASDKREKIEDNGNFRLFLEQIHVLENSLVLKFHTVRDEECSELSMVADKTEKAGEYSVTY--DGFNTFTIPKTDYD
-dist     :           211011000000000  6 07   968  550000110010000146    531000002 7   60100123  22111001 3048
+ori. pos.:           ┌1                      22┐  ┌38                         64┐┌65
+connect  :           +-------------------------+  +-----------------------------++----------------------------
+QUERY    :           CDAFVGTWKLVSSEN--FDDY---MKE--PNMIISVNGDLVTIRSES----TFKNTEISFK-----LGVEFDEITADDRKVKSIITLDG
+match    :           ||:||||||||||||   :.         ..:|||||||||||||:.    .:||||||:.      |:||||      .||||||||:
+TARGET   :EEASSTGRNFNVEKINGEWHTIILASDKREKIEDNGNFRLFLEQIHVLENSLVLKFHTVRDEECSELSMVADKTEKAGEYSVTY------DGFNTFTIPK
+dist     :           112000101000001  5248   79   342111010010111024    4201110023     5121100      3000110002
 ali. pos.:         10        20        30        40        50        60        70        80        90
 
-PUs      :                              PU2                   PU5
-ori. pos.:                 105┐    ┌23         37┐┌106                      131┐
-connect  :--------------------+    +-------------++----------------------------+
-QUERY    :GALVQVQKWD----GKSTTIK----VGVGFATRKVAGMAKRKRDGDKLVVECVMKGVT--STRV--YERA
-match    :.|||||||:.    .||||||    .|||||||||||||.             .|.|.  |::|  :.||
-TARGET   :NFLMAHLINEKDGETFQLMGLYGREPDLSSDIKERFAQLC-----------EEHGILRENIIDLSNANRC
-dist     :3100000023    3100010    311000000000003           9731413  0221  2310
+PUs      :                                  PU2                   PU5
+ori. pos.:                   105┐      ┌23         37┐┌106                      131┐
+connect  :----------------------+      +-------------++----------------------------+
+QUERY    :G------ALVQVQKWDGKSTTIK------VGVGFATRKVAGMAKRKRDGDKLVVECVMKGVT-STRVY---ERA
+match    ::      ||||||||||||||||      :|||||||||||||:             .: .  .||||   :|:
+TARGET   :TDYDNFLMAHLINEKDGETFQLMGLYGREPDLSSDIKERFAQLC-----------EEHGILRENIIDLSNANRC
+dist     :2      1001100010100000      200000000001102           7532635 31111   212
 ali. pos.:         110       120       130       140       150       160       170
 
 Aligned distance (match <=> dist): '|' <= 1 Å
@@ -252,9 +286,9 @@ Aligned distance (match <=> dist): '|' <= 1 Å
                                    '.' <= 3 Å
 
 Best solution(s):
---> /home/republique/cretin/PROJECTS/icarus/icarus_output/results/d1adl___and_d1mup__/solution_1_d1adl__-level_2_5_PUs-on-d1mup__.pdb
+--> /home/republique/cretin/PROJECTS/icarus-github/icarus_output/results/d1adl___and_d1mup__/solution_3_d1adl__-level_2_5_PUs-on-d1mup__.pdb
 
-Total runtime: 26.3 seconds
+Total runtime: 30.0 seconds
 ```
 
 ## ICARUS output directories/files explained:
