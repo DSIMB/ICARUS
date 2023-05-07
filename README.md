@@ -39,48 +39,10 @@ When given a pair of proteins to align, the program will generate several output
 * For each exploration level, the best alignments are kept in a `results_PDB` directory, containing both the PDB files of the query alone and the query aligned against the target.
 
 
-## Docker (recommended) - Linux, MacOS (Intel) and Windows
-
-Icarus is available as a Docker image (143.42 MB compressed, 391MB MB on disk).  
-You can either pull the latest image from Dockerhub:  
-```
-docker pull dsimb/icarus
-```
-
-Run the image:  
-```
-# Set internal /dev/shm size as your RAM size, it is used to write tmp files for faster processing.
-# The space used depends on several parameters, but a good value generally is >=1 GB.
-# If an error occures about lack of space on device, increase this value.
-# For convenience the following command lines (Linux or Mac) retrieve the max value of RAM available
-# For windows users, please set shm variable manually: shm!<int>
-shm=$(free -g | awk '/^Mem:/{print $2}')gb # linux
-shm=$(system_profiler SPHardwareDataType | grep "Memory:" | awk '{print $2}')gb # MacOS
-mkdir icarus_output
-docker run -it --shm-size $shm -v $(pwd)/icarus_output:/icarus/icarus_output -v ./data:/data dsimb/icarus -p1 /data/RIPC/d1adl__.pdb -p2 /data/RIPC/d1mup__.pdb
-
-# Show help
-docker run dsimb/icarus
-```
-
-### Docker - MacOS (Apple Silicon M1)  
-
-Docker Desktop >= 3.3.1 is required.
-For the ARM64 architecture of Apple Silicon M1(+) CPU, there is an additional option to add to all docker command: `--platform linux/arm64`:  
-
-```
-# Build the image and tag it icarus
-docker build --platform linux/arm64 -t icarus .
-
-# Run the image
-docker run --platform linux/arm64 -it --shm-size $shm -v $(pwd)/icarus_output:/icarus/icarus_output -v ./data:/data dsimb/icarus -p1 /data/RIPC/d1adl__.pdb -p2 /data/RIPC/d1mup__.pdb
-```
-
 ## Dependencies
 
-First, you need to run the installer in order to deploy the workspace.
-This will essentially compile and install SWORD and its dependencies,  
-TMalign, and create a few directories to work.
+First, you need to run `install.sh`.
+This will essentially compile and install SWORD and its dependencies.
 
 ```bash
 ./install.sh
@@ -88,7 +50,7 @@ TMalign, and create a few directories to work.
 
 ### Conda
 
-If you are familiar with conda, you should create an environment using the `environment.yml` file in the git repository which contains all dependencies.
+Create an environment using the `environment.yml` file in the git repository which contains all dependencies.
 
 ```bash
 # Create the environment
