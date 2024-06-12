@@ -1502,6 +1502,11 @@ def parse_arguments():
                         This may use a large amount of RAM if proteins are large e.g. > 200 residues'''),
         action="store_true",
         default=False)
+    optional.add_argument(
+        "--version",
+        action="version",
+        version="ICARUS v1.1.1",
+        help="Show ICARUS version number and exit")
     args = parser.parse_args()
     return args
 
