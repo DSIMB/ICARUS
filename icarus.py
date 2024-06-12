@@ -1236,13 +1236,42 @@ def parse_arguments():
     Returns:
         args: The arguments as an object
     """
-    def check_path(path):
+
+    def check_and_rename_file(file_path):
         """
-        Check the input path sanity
+        Checks if a file name (excluding the directory path) contains more than one dot (".")
+        because KPAX generates errors otherwise.
+        If so, prints a warning and renames the file by replacing all excessive dots with underscores ("_")
+        except the last one, which is considered the dot for the file extension.
         """
-        if os.path.isfile(path):
-            return path
-        raise argparse.ArgumentTypeError(f"Error: file:{path} does not exist")
+        # Check path sanity
+        if not os.path.isfile(file_path):
+            raise argparse.ArgumentTypeError(f"Error: file:{file_path} does not exist")
+        
+        # Extract the directory and file name from the path
+        dir_name, file_name = os.path.split(file_path)
+        
+        # Split the file name into parts separated by dots
+        parts = file_name.split('.')
+        
+        # Check if there are more than one dot in the file name
+        if len(parts) > 2:
+            print("\nWarning: KPAX generates errors if filenames contain more than one dot",
+                  "\tTherefore excessive dots have been replaced with underscores except the last one",
+                  "\twhich is considered to be the dot for the suffix.\n",
+                  sep="\n")
+            
+            # Construct the new file name
+            new_file_name = '_'.join(parts[:-1]) + '.' + parts[-1]
+            
+            # Construct the new full path
+            new_file_path = os.path.join(dir_name, new_file_name)
+            
+            # Rename the file
+            shutil.copy(file_path, new_file_path)
+            print(f"File: {file_path} was copied and renamed as: {new_file_path}")
+            return new_file_path
+        return file_path
 
     def check_cpu(nb_cpu):
         """
@@ -1343,12 +1372,12 @@ def parse_arguments():
     required.add_argument("-p1",
                         "--protein1",
                         help="Path to the first protein to align",
-                        type=check_path,
+                        type=check_and_rename_file,
                         required=True)
     required.add_argument("-p2",
                         "--protein2",
                         help="Path to the second protein to align",
-                        type=check_path,
+                        type=check_and_rename_file,
                         required=True)
     optional.add_argument("-m",
                         "--min-size",
