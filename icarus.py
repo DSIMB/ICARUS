@@ -710,7 +710,11 @@ def draw_pu_ranges(PUs_delim_to_keep, new_delims, line_PU_connection, ori_res_qu
                                     line_PU_positions[stop:]
     return line_PU_positions
 
-def draw_pu_number(line_CHAIN1, pu_order_ascending_target_pos, PUs_order_to_delim, new_delims):
+def draw_pu_number(line_CHAIN1,
+                   pu_order_ascending_target_pos,
+                   PUs_order_to_delim,
+                   new_delims,
+                   pu_order_ascending_query_pos):
     """
     Draw the PUs numbers: →      PU1         PU2                 PU3
                               ┌12    21┐┌22       34┐  ┌36                  56┐
@@ -720,13 +724,13 @@ def draw_pu_number(line_CHAIN1, pu_order_ascending_target_pos, PUs_order_to_deli
         - pu_order_ascending_target_pos (list): list of PUs order ascending by target position
         - PUs_order_to_delim (dict): keys are the PUs order and values are the delimitations
         - new_delims (dict): keys are the original delimitations and values are the new delimitations
-    
+        - pu_order_ascending_query_pos (list): list of PUs order ascending by query position
+
     Returns:
         - line_PU (str): line of the PUs numbers
     """
     line_PU = " " * len(line_CHAIN1.rstrip("-"))
     for pu_i in pu_order_ascending_target_pos:
-        # if the PU is not out of the scope of the target sequence length
         if pu_i in PUs_order_to_delim:
             start, end = PUs_order_to_delim[pu_i]
             if start in new_delims and end in new_delims:
@@ -734,7 +738,11 @@ def draw_pu_number(line_CHAIN1, pu_order_ascending_target_pos, PUs_order_to_deli
                 new_end = new_delims[end] - 1
                 # Place the string in the middle of the PU range
                 index = (new_end + new_start) // 2
-                line_PU = line_PU[:index - 2] + "PU" + str(pu_i + 1) + line_PU[index + 1:]
+                # compute the label as its position in the query‐ascending list
+                pu_label = pu_order_ascending_query_pos.index(pu_i) + 1
+                line_PU = (line_PU[:index - 2]
+                           + "PU" + str(pu_label)
+                           + line_PU[index + 1:])
     return line_PU
 
 def draw_matching_symbols(line_DIST, distances):
@@ -1075,7 +1083,11 @@ def draw_textual_alignment(query, target, graph, ori_res_query, smoothed_pu_outp
         # Set order of PUs number for "PUs" text line:       PU1           PU2
         #                                                 ┌12    21┐  ┌22       34┐
         #                                                 +--------+  +-----------+
-        line_PU = draw_pu_number(line_CHAIN1, pu_order_ascending_target_pos, PUs_order_to_delim_ascending_target_pos, new_delims)
+        line_PU = draw_pu_number(line_CHAIN1,
+                                 pu_order_ascending_target_pos,
+                                 PUs_order_to_delim_ascending_target_pos,
+                                 new_delims,
+                                 pu_order_ascending_query_pos)
         # Set the "matching symbols" line
         line_MATCH = draw_matching_symbols(line_DIST, distances)
         # Textual output for single PU / line matched to the
