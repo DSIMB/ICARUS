@@ -1522,7 +1522,6 @@ if __name__ == "__main__":
             os.makedirs(path, exist_ok=True)
 
     # Set variables
-    p.Protein.seg_size = args.min_size
     exploration_level = args.exploration_level
     opt_prune = args.prune
     verbose = args.verbose
@@ -1543,14 +1542,10 @@ if __name__ == "__main__":
     # Check, reformat and clean input PDB files
     new_path1, new_path2, ori_res_num_and_chain1, ori_res_num_and_chain2, len1, len2 = clean_input_pdb_files(path1, path2, chain1, chain2)
     nb_pus_requested = INTERVALS[exploration_level]
-    min_len_pu = len1 // max(nb_pus_requested)
-    min_len_pu1 = min_len_pu if 15 <= min_len_pu <= 25 else 15
-    p1 = p.Protein(new_path1, ori_path=path1, min_len_pu=min_len_pu1)
+    p1 = p.Protein(new_path1, ori_path=path1, min_len_pu=args.min_size)
     p1.set_1d_seq()
     print(f"\n    {p1.length} aa\n    Seq: {p1.seq}")
-    min_len_pu = len2 // max(nb_pus_requested)
-    min_len_pu2 = min_len_pu if 15 <= min_len_pu <= 25 else 15
-    p2 = p.Protein(new_path2, ori_path=path2, min_len_pu=min_len_pu2)
+    p2 = p.Protein(new_path2, ori_path=path2, min_len_pu=args.min_size)
     p2.set_1d_seq()
     print(f"\n    {p2.length} aa\n    Seq: {p2.seq}")
     max_len_p1_p2 = max(p1.length, p2.length)
