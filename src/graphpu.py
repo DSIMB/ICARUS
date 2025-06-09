@@ -590,9 +590,12 @@ class GraphPU:
             for residue in ali.all_aligned["all_pu_aligned_positions"]:
                 atoms = [atom for atom in ali.new_query_dict[residue]]
                 merged_pus += atoms
+
+        pu_order_sort = pu_order.copy()
+        pu_order_sort.sort()
         # Check if the PUs in the paths are consecutive ascending or descending
         # If sequential is True, we only keep the paths that are consecutive
-        if sequential and query_seq != query.seq:
+        if sequential and pu_order != pu_order_sort:
             pass
         else:
             merged_pus_pdb = "".join(merged_pus)
