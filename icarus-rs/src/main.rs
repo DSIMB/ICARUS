@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use rayon::prelude::*;
 
 use icarus::align::{align_pair, AlignParams};
+use icarus::db::{read_db, write_db};
 use icarus::dp::DpWork;
 use icarus::output;
 use icarus::prep::{prepare, PrepParams, Prepared};
@@ -53,6 +54,10 @@ struct AlignOpts {
     /// Skip the refit stage (re-placing rigid bodies on the free target)
     #[arg(long)]
     no_refit: bool,
+    /// Drop residues whose C-alpha B-factor (pLDDT for AlphaFold models) is
+    /// below this value before any processing
+    #[arg(long)]
+    min_plddt: Option<f32>,
 }
 
 impl AlignOpts {
@@ -129,6 +134,38 @@ enum Cmd {
         #[arg(long)]
         pairs: bool,
     },
+    /// Preprocess structures (parse, DSSP, Protein Peeling) into a database
+    Createdb {
+        /// Directory (searched recursively) or text file listing structure paths
+        input: PathBuf,
+        /// Output database (.icdb)
+        output: PathBuf,
+        /// Threads (0 = all cores)
+        #[arg(short, long, default_value_t = 0)]
+        threads: usize,
+        #[command(flatten)]
+        opts: AlignOpts,
+    },
+    /// Flexible alignment of database structures: all-vs-all, or the candidate
+    /// pairs of a list (e.g. a Foldseek .m8 prefilter result)
+    Search {
+        query_db: PathBuf,
+        target_db: PathBuf,
+        /// Candidate pairs (first two columns: query and target names)
+        #[arg(long)]
+        pairs: Option<PathBuf>,
+        /// Output TSV (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Only report pairs with a flexible TM-score >= this value
+        #[arg(long, default_value_t = 0.0)]
+        min_tm: f64,
+        /// Threads (0 = all cores)
+        #[arg(short, long, default_value_t = 0)]
+        threads: usize,
+        #[command(flatten)]
+        opts: AlignOpts,
+    },
     /// Print the Protein Unit hierarchy of a structure
     Peel {
         structure: PathBuf,
@@ -148,8 +185,8 @@ fn main() -> Result<()> {
             let (pp, ap) = opts.params();
             let keep = out_pdb.is_some();
             let t0 = Instant::now();
-            let a = prepare(read_structure(&structure1, chain1.as_deref(), keep)?, &pp);
-            let b = prepare(read_structure(&structure2, chain2.as_deref(), keep)?, &pp);
+            let a = prepare(load(&structure1, chain1.as_deref(), keep, &opts)?, &pp);
+            let b = prepare(load(&structure2, chain2.as_deref(), keep, &opts)?, &pp);
             let t1 = Instant::now();
             let mut work = DpWork::default();
             let r = align_pair(&a, &b, &ap, &mut work);
@@ -186,7 +223,7 @@ fn main() -> Result<()> {
                 .par_iter()
                 .filter_map(|id| {
                     let path = dir.join(format!("{id}{ext}"));
-                    match read_structure(&path, None, keep) {
+                    match load(&path, None, keep, &opts) {
                         Ok(s) => Some((id.clone(), Arc::new(prepare(s, &pp)))),
                         Err(e) => {
                             eprintln!("warning: {id}: {e:#}");
@@ -238,6 +275,99 @@ fn main() -> Result<()> {
                 lines.len() as f64 / (t2 - t1).as_secs_f64().max(1e-9)
             );
         }
+        Cmd::Createdb { input, output, threads, opts } => {
+            if threads > 0 {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).build_global().ok();
+            }
+            let (pp, _) = opts.params();
+            let files = collect_files(&input)?;
+            let t0 = Instant::now();
+            let items: Vec<Prepared> = files
+                .par_iter()
+                .filter_map(|p| match load(p, None, false, &opts) {
+                    Ok(s) => Some(prepare(s, &pp)),
+                    Err(e) => {
+                        eprintln!("warning: {}: {e:#}", p.display());
+                        None
+                    }
+                })
+                .collect();
+            write_db(&output, &items)?;
+            let nres: usize = items.iter().map(|p| p.len()).sum();
+            eprintln!(
+                "{} structures ({} residues) preprocessed in {:.2} s -> {}",
+                items.len(),
+                nres,
+                t0.elapsed().as_secs_f64(),
+                output.display()
+            );
+        }
+        Cmd::Search { query_db, target_db, pairs, output: out, min_tm, threads, opts } => {
+            if threads > 0 {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).build_global().ok();
+            }
+            let (_, ap) = opts.params();
+            let t0 = Instant::now();
+            let same = query_db == target_db;
+            let qs = read_db(&query_db)?;
+            let ts = if same { Vec::new() } else { read_db(&target_db)? };
+            let tset: &Vec<Prepared> = if same { &qs } else { &ts };
+            let qidx: HashMap<&str, usize> = qs.iter().enumerate().map(|(i, p)| (p.s.name.as_str(), i)).collect();
+            let tidx: HashMap<&str, usize> = tset.iter().enumerate().map(|(i, p)| (p.s.name.as_str(), i)).collect();
+            let lookup = |m: &HashMap<&str, usize>, n: &str| -> Option<usize> {
+                let n = strip_name(n);
+                m.get(n.as_str()).copied().or_else(|| n.rsplit_once('_').and_then(|(a, _)| m.get(a).copied()))
+            };
+            let list: Vec<(usize, usize)> = match &pairs {
+                Some(p) => {
+                    let mut v: Vec<(usize, usize)> = read_pairs(p)?
+                        .iter()
+                        .filter_map(|(a, b)| Some((lookup(&qidx, a)?, lookup(&tidx, b)?)))
+                        .filter(|(a, b)| !(same && a == b))
+                        .collect();
+                    if same {
+                        v.iter_mut().for_each(|x| *x = (x.0.min(x.1), x.0.max(x.1)));
+                    }
+                    v.sort_unstable();
+                    v.dedup();
+                    v
+                }
+                None if same => (0..qs.len()).flat_map(|i| (i + 1..qs.len()).map(move |j| (i, j))).collect(),
+                None => (0..qs.len()).flat_map(|i| (0..tset.len()).map(move |j| (i, j))).collect(),
+            };
+            let t1 = Instant::now();
+            eprintln!("loaded {} + {} structures in {:.2} s; {} pairs to align", qs.len(), tset.len(), (t1 - t0).as_secs_f64(), list.len());
+            let mut w: Box<dyn Write> = match &out {
+                Some(p) => Box::new(BufWriter::new(std::fs::File::create(p)?)),
+                None => Box::new(BufWriter::new(std::io::stdout())),
+            };
+            writeln!(w, "{}\tms", output::TSV_HEADER)?;
+            let mut done = 0usize;
+            let mut kept = 0usize;
+            for chunk in list.chunks(20_000) {
+                let lines: Vec<String> = chunk
+                    .par_iter()
+                    .map_init(DpWork::default, |work, &(i, j)| {
+                        let (a, b) = (&qs[i], &tset[j]);
+                        let ts = Instant::now();
+                        let r = align_pair(a, b, &ap, work);
+                        if r.tm_flex() < min_tm {
+                            return None;
+                        }
+                        Some(format!("{}\t{:.2}", output::tsv_line(&r, a, b), ts.elapsed().as_secs_f64() * 1e3))
+                    })
+                    .flatten()
+                    .collect();
+                for l in &lines {
+                    writeln!(w, "{l}")?;
+                }
+                done += chunk.len();
+                kept += lines.len();
+                let el = t1.elapsed().as_secs_f64();
+                eprintln!("  {done}/{} pairs ({:.1} pairs/s), {kept} reported", list.len(), done as f64 / el.max(1e-9));
+            }
+            w.flush()?;
+        }
         Cmd::Gdt { structure1, structure2, len, pairs } => {
             let a = read_structure(&structure1, None, false)?;
             let b = read_structure(&structure2, None, false)?;
@@ -264,6 +394,62 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn load(path: &Path, chain: Option<&str>, keep: bool, opts: &AlignOpts) -> Result<icarus::structure::Structure> {
+    let mut s = read_structure(path, chain, keep)?;
+    if let Some(t) = opts.min_plddt {
+        s.mask_low_confidence(t);
+        anyhow::ensure!(s.len() >= 10, "fewer than 10 residues left after pLDDT masking");
+    }
+    Ok(s)
+}
+
+fn is_structure_file(p: &Path) -> bool {
+    let s = p.to_string_lossy().to_ascii_lowercase();
+    let s = s.strip_suffix(".gz").unwrap_or(&s);
+    [".pdb", ".cif", ".ent", ".mmcif"].iter().any(|e| s.ends_with(e))
+}
+
+fn collect_files(input: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    if input.is_dir() {
+        let mut stack = vec![input.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d)? {
+                let p = e?.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if is_structure_file(&p) {
+                    out.push(p);
+                }
+            }
+        }
+    } else {
+        for line in std::io::BufReader::new(std::fs::File::open(input)?).lines() {
+            let l = line?;
+            let l = l.trim();
+            if !l.is_empty() && !l.starts_with('#') {
+                out.push(PathBuf::from(l));
+            }
+        }
+    }
+    out.sort();
+    // one file per structure name (e.g. AFDB ships both .cif.gz and .pdb.gz)
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(strip_name(&p.file_name().unwrap_or_default().to_string_lossy())));
+    Ok(out)
+}
+
+/// Structure name as stored in databases: file name without structure extensions.
+fn strip_name(s: &str) -> String {
+    let mut n = s.to_string();
+    for ext in [".gz", ".pdb", ".cif", ".ent", ".mmcif"] {
+        if let Some(x) = n.strip_suffix(ext) {
+            n = x.to_string();
+        }
+    }
+    n
 }
 
 fn read_pairs(path: &Path) -> Result<Vec<(String, String)>> {

@@ -50,6 +50,8 @@ pub struct Structure {
     pub resn: Vec<[u8; 3]>,
     pub ca: Vec<V3>,
     pub resid: Vec<ResId>,
+    /// C-alpha B-factor (pLDDT for predicted models).
+    pub bfac: Vec<f32>,
     pub backbone: Vec<Backbone>,
     pub atoms: Vec<Atom>,
 }
@@ -61,6 +63,36 @@ impl Structure {
 
     pub fn is_empty(&self) -> bool {
         self.ca.is_empty()
+    }
+
+    /// Keep only residues whose C-alpha B-factor is >= `min_b` (e.g. pLDDT
+    /// masking of low-confidence regions of AlphaFold models).
+    pub fn mask_low_confidence(&mut self, min_b: f32) {
+        let keep: Vec<bool> = self.bfac.iter().map(|&b| b >= min_b).collect();
+        if keep.iter().all(|&k| k) {
+            return;
+        }
+        let mut new_index = vec![u32::MAX; keep.len()];
+        let mut k = 0u32;
+        for (i, &kp) in keep.iter().enumerate() {
+            if kp {
+                new_index[i] = k;
+                k += 1;
+            }
+        }
+        fn filt<T: Clone>(v: &[T], keep: &[bool]) -> Vec<T> {
+            v.iter().zip(keep).filter(|(_, &k)| k).map(|(x, _)| x.clone()).collect()
+        }
+        self.seq = filt(&self.seq, &keep);
+        self.resn = filt(&self.resn, &keep);
+        self.ca = filt(&self.ca, &keep);
+        self.resid = filt(&self.resid, &keep);
+        self.bfac = filt(&self.bfac, &keep);
+        self.backbone = filt(&self.backbone, &keep);
+        self.atoms.retain(|a| keep[a.res as usize]);
+        for a in self.atoms.iter_mut() {
+            a.res = new_index[a.res as usize];
+        }
     }
 }
 
@@ -399,6 +431,7 @@ fn build(name: String, raw: Vec<RawAtom>, chain: Option<&str>, keep_atoms: bool)
             s.seq.push(aa);
             s.resn.push(if a0.hetatm && aa != b'X' { mapped_resn(aa) } else { a0.resn });
             s.resid.push(ResId { num: a0.resnum, icode: a0.icode });
+            s.bfac.push(res_atoms.iter().find(|a| &a.name == b" CA ").map_or(0.0, |a| a.bfactor));
             s.backbone.push(Backbone { n: find(b" N  "), ca: Some(ca), c: find(b" C  "), o: find(b" O  ") });
             if keep_atoms {
                 for a in res_atoms.iter() {

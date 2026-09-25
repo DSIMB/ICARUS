@@ -69,6 +69,53 @@ def run_tmalign_like(exe, q, t, qpath, tpath, work):
     return [(moved, tpath, False, dt)]
 
 
+KPAX = os.path.join(os.path.dirname(HERE), "bin", "kpax", "bin", "kpax5.1.3.x64")
+KPAX_OPTS = ["-nosubdirs", "-nohex", "-novmd", "-nojmol", "-nomatrix", "-nosse", "-nofasta", "-nopir",
+             "-nokrmsd", "-noprofit", "-nohits", "-notops", "-norank", "-norainbow", "-pdb"]
+
+
+def run_kpax(q, t, qpath, tpath, work, flex):
+    """KPAX superposes the 2nd structure onto the 1st (kept rigid)."""
+    wd = os.path.join(work, "%s_%s" % (q, t))
+    os.makedirs(wd, exist_ok=True)
+    for s, p in ((q, qpath), (t, tpath)):
+        dst = os.path.join(wd, s + ".pdb")
+        if not os.path.exists(dst):
+            os.symlink(os.path.abspath(p), dst)
+    t0 = time.time()
+    subprocess.run([KPAX, "-flex" if flex else "-rigid"] + KPAX_OPTS + [t + ".pdb", q + ".pdb"],
+                   cwd=wd, capture_output=True)
+    dt = time.time() - t0
+    moved = os.path.join(wd, "kpax_results", "%s_%s%s.pdb" % (q, t, "_flex" if flex else ""))
+    return moved, tpath, False, dt
+
+
+def run_foldseek(exe, q, t, qpath, tpath, work, mode):
+    """Foldseek pairwise alignment (--alignment-type 1 = TM-align, 2 = 3Di+AA);
+    the reported superposition (u, t) is applied to the query."""
+    wd = os.path.join(work, "%s_%s" % (q, t))
+    os.makedirs(wd, exist_ok=True)
+    out = os.path.join(wd, "aln.m8")
+    t0 = time.time()
+    subprocess.run([exe, "easy-search", qpath, tpath, out, os.path.join(wd, "tmp"), "--exhaustive-search", "1",
+                    "-e", "inf", "--alignment-type", str(mode), "--format-output", "query,target,u,t,alntmscore",
+                    "--threads", "1", "-v", "0"], capture_output=True)
+    dt = time.time() - t0
+    moved = os.path.join(wd, "moved.pdb")
+    lines = [l for l in open(out)] if os.path.exists(out) else []
+    if not lines:
+        return None
+    f = lines[0].rstrip("\n").split("\t")
+    u = [float(x) for x in f[2].split(",")]
+    tr = [float(x) for x in f[3].split(",")]
+    # (u, t) superpose the target onto the query: apply the inverse to the query
+    rot = [u[0:3], u[3:6], u[6:9]]
+    rt = [[rot[j][i] for j in range(3)] for i in range(3)]
+    ti = [-sum(rt[i][k] * tr[k] for k in range(3)) for i in range(3)]
+    apply_matrix_pdb(qpath, moved, rt, ti)
+    return moved, tpath, False, dt
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("method")
@@ -131,6 +178,28 @@ def main():
         for q, t in pairs:
             (mv, fx, second, dt) = run_tmalign_like(a.exe, q, t, spath(q), spath(t), work)[0]
             results[(q, t)] = (mv, fx, second, dt, "")
+    elif a.method in ("kpax", "kpax_flex"):
+        for q, t in pairs:
+            mv, fx, second, dt = run_kpax(q, t, spath(q), spath(t), work, a.method == "kpax_flex")
+            if os.path.exists(mv):
+                results[(q, t)] = (mv, fx, second, dt, "")
+    elif a.method in ("foldseek_tm", "foldseek_3di"):
+        for q, t in pairs:
+            r = run_foldseek(a.exe, q, t, spath(q), spath(t), work, 1 if a.method == "foldseek_tm" else 2)
+            if r:
+                results[(q, t)] = r + ("",)
+    elif a.method in ("fatcat_flex", "fatcat_rigid"):
+        # a.exe: Java classpath holding BioJava and the compiled RunFatcat driver
+        plist = os.path.join(work, "pairs.txt")
+        with open(plist, "w") as f:
+            for q, t in pairs:
+                f.write("%s\t%s\n" % (q, t))
+        models = os.path.join(work, "models")
+        subprocess.run(["java", "-cp", a.exe, "RunFatcat", "flexible" if a.method == "fatcat_flex" else "rigid",
+                        plist, a.structs, models], capture_output=True)
+        for line in open(os.path.join(models, "times.tsv")):
+            q, t, secs, blocks = line.rstrip("\n").split("\t")
+            results[(q, t)] = (os.path.join(models, "%s__%s.pdb" % (q, t)), spath(t), False, float(secs), blocks)
     else:
         sys.exit("unknown method " + a.method)
 

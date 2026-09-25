@@ -1,6 +1,7 @@
 //! ICARUS 2: fast flexible protein structural alignment based on Protein Units.
 
 pub mod align;
+pub mod db;
 pub mod dp;
 pub mod dssp;
 pub mod geom;
