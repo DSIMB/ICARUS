@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+bin/SWORD_bin/Dssp/*.o
+bin/SWORD_bin/Dssp/dsspcmbi
+icarus_output/

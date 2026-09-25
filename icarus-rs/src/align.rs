@@ -1,0 +1,930 @@
+//! Flexible structural alignment based on Protein Units.
+//!
+//! For a query whose PU hierarchy is known and a rigid target:
+//!  1. candidate superpositions come from aligned fragment blocks (seeds.rs);
+//!  2. every candidate is scored on every PU of the hierarchy at once, using
+//!     a distance grid of the target and prefix sums over the query;
+//!  3. the candidates of each PU are polished by a cheap closest-point
+//!     iteration on the grid, and the best diverse ones are refined by
+//!     windowed DP + iteratively reweighted superposition (which increases the
+//!     TM objective monotonically for fixed residue pairs); placements of a PU
+//!     are also tried for its children;
+//!  4. an exact dynamic programme picks a set of disjoint PUs (from any level
+//!     of the hierarchy) with non-overlapping target regions, maximising the
+//!     summed score minus a per-hinge penalty;
+//!  5. the chosen rigid bodies are merged into a chimera ordered along the
+//!     target, aligned with the gdt2.pl DP used by ICARUS to score solutions,
+//!     and each body is re-superposed on its aligned pairs until convergence;
+//!  6. each body is then re-placed against the target residues left free by
+//!     the others (the ICARUS "updated target" idea) when that improves the
+//!     total score.
+//!
+//! The procedure runs in both directions (each protein peeled in turn) and the
+//! best-scoring solution is kept, as in ICARUS.
+
+use crate::dp::{DpWork, SoA};
+use crate::geom::{dist2, superpose, Transform, V3};
+use crate::grid::{DistGrid, KernelLut, FAR};
+use crate::prep::Prepared;
+use crate::seeds::{block_transform, find_blocks, select_blocks};
+use crate::tm;
+
+/// Parameters of the pairwise alignment.
+#[derive(Debug, Clone)]
+pub struct AlignParams {
+    /// Maximum number of rigid bodies (PUs) in a solution.
+    pub max_segments: usize,
+    /// Score penalty per additional rigid body, in TM-score units.
+    pub hinge_penalty: f64,
+    /// Stride over query fragments when searching seeds.
+    pub q_stride: usize,
+    /// Maximum number of seed superpositions evaluated per direction.
+    pub max_seeds: usize,
+    /// Base number of candidate placements refined per PU (small PUs get more).
+    pub per_node: usize,
+    /// Fragment dRMS tolerance (Å) for aligned fragment pairs.
+    pub frag_tol: f32,
+    /// Peel and align in both directions (the ICARUS default).
+    pub both_directions: bool,
+    /// Run the refit stage (re-placing bodies on the free target).
+    pub refit: bool,
+}
+
+impl Default for AlignParams {
+    fn default() -> Self {
+        Self {
+            max_segments: 6,
+            hinge_penalty: 0.0,
+            q_stride: 2,
+            max_seeds: 1500,
+            per_node: 3,
+            frag_tol: 1.0,
+            both_directions: true,
+            refit: true,
+        }
+    }
+}
+
+/// One rigid body of a flexible alignment: query residues qs..=qe moved by `tr`.
+#[derive(Debug, Clone)]
+pub struct Segment {
+    pub qs: usize,
+    pub qe: usize,
+    pub tr: Transform,
+}
+
+/// An alignment of a (possibly segmented) query onto a rigid target.
+#[derive(Debug, Clone, Default)]
+pub struct Alignment {
+    pub segs: Vec<Segment>,
+    /// Order of the segments along the target (chimera order).
+    pub order: Vec<usize>,
+    /// Aligned (query, target) residue indices, in chimera order.
+    pub pairs: Vec<(u32, u32)>,
+    /// Segment of each aligned pair.
+    pub pair_seg: Vec<u16>,
+    /// Sum of TM kernels over aligned pairs (d0 of the normalisation length).
+    pub raw: f64,
+}
+
+/// Result of aligning two structures.
+#[derive(Debug, Clone)]
+pub struct PairResult {
+    /// The flexible solution. If `reversed`, the segmented ("query") protein is
+    /// the second input and residue indices in `flex` refer to (second, first).
+    pub flex: Alignment,
+    pub rigid: Alignment,
+    pub reversed: bool,
+    pub rigid_reversed: bool,
+    pub len1: usize,
+    pub len2: usize,
+    pub lnorm: usize,
+}
+
+impl PairResult {
+    pub fn tm_flex(&self) -> f64 {
+        self.flex.raw / self.lnorm as f64
+    }
+    pub fn tm_rigid(&self) -> f64 {
+        self.rigid.raw / self.lnorm as f64
+    }
+}
+
+/// Experimental knobs (environment variables, for tuning only).
+#[derive(Clone, Copy)]
+struct Knobs {
+    refine_iters: usize,
+    gain_stop: f64,
+    icp: bool,
+    refit_dp: usize,
+    score_stride: usize,
+    sig2: f64,
+    full_cells: usize,
+    band_later: bool,
+    band1: usize,
+    fin_iters: usize,
+    prune: f64,
+    refit_rounds: usize,
+}
+
+fn knobs() -> Knobs {
+    let g = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
+    Knobs {
+        refine_iters: g("IK_ITERS", 4.0) as usize,
+        gain_stop: g("IK_GAIN", 0.002),
+        icp: g("IK_ICP", 0.0) > 0.5,
+        refit_dp: g("IK_REFIT_DP", 3.0) as usize,
+        score_stride: g("IK_STRIDE", 0.0) as usize,
+        sig2: g("IK_SIG2", 9.0),
+        full_cells: g("IK_FULL", 6000.0) as usize,
+        band_later: g("IK_BANDLATER", 1.0) > 0.5,
+        band1: g("IK_BAND1", 20.0) as usize,
+        fin_iters: g("IK_FIN", 3.0) as usize,
+        prune: g("IK_PRUNE", 0.5),
+        refit_rounds: g("IK_ROUNDS", 2.0) as usize,
+    }
+}
+
+struct Ctx<'a> {
+    k: Knobs,
+    q: &'a Prepared,
+    t: &'a Prepared,
+    tsoa: SoA,
+    inv_d02: f64,
+    inv_d02s: f64,
+    grid: DistGrid,
+    lut: KernelLut,
+}
+
+#[derive(Debug, Clone)]
+struct Placement {
+    node: usize,
+    tr: Transform,
+    raw: f64,
+    /// Core target span (well superposed pairs).
+    ta: u32,
+    tb: u32,
+}
+
+#[inline]
+fn cmp_desc(a: f64, b: f64) -> std::cmp::Ordering {
+    b.partial_cmp(&a).unwrap_or(std::cmp::Ordering::Equal)
+}
+
+/// Iteratively reweighted superposition on fixed pairs: maximises
+/// sum 1/(1+d²/d0²) (minorise-maximise with weights 1/(1+d²/d0²)²).
+fn irls(q: &[V3], t: &[V3], pairs: &[(u32, u32)], tr0: Transform, inv_d02: f64, iters: usize) -> (Transform, f64) {
+    let score = |tr: &Transform| -> f64 {
+        pairs.iter().map(|&(i, j)| tm::kernel(dist2(&tr.apply(&q[i as usize]), &t[j as usize]), inv_d02)).sum()
+    };
+    let mut best_tr = tr0;
+    let mut best = score(&tr0);
+    if pairs.len() < 3 {
+        return (best_tr, best);
+    }
+    let xs: Vec<V3> = pairs.iter().map(|&(i, _)| q[i as usize]).collect();
+    let ys: Vec<V3> = pairs.iter().map(|&(_, j)| t[j as usize]).collect();
+    let mut w = vec![0.0; pairs.len()];
+    let mut tr = tr0;
+    for _ in 0..iters {
+        for (k, wk) in w.iter_mut().enumerate() {
+            let k1 = tm::kernel(dist2(&tr.apply(&xs[k]), &ys[k]), inv_d02);
+            *wk = k1 * k1;
+        }
+        let (nt, _) = superpose(&xs, &ys, Some(&w));
+        let s = score(&nt);
+        tr = nt;
+        if s > best + 1e-9 {
+            best = s;
+            best_tr = nt;
+        } else {
+            break;
+        }
+    }
+    (best_tr, best)
+}
+
+/// Closest-point polishing of a candidate superposition of residues s..=e,
+/// using the target grid (no sequence constraint). `occ` marks target
+/// residues that may not be used. Returns (grid score, transform).
+fn quick_refine(ctx: &Ctx, s: usize, e: usize, tr0: Transform, occ: Option<&[bool]>) -> (f32, Transform) {
+    let q = &ctx.q.s.ca;
+    let t = &ctx.t.s.ca;
+    let score_of = |tr: &Transform| -> f32 {
+        let mut sc = 0f32;
+        for x in &q[s..=e] {
+            let (d, j) = ctx.grid.lookup(&tr.apply(x));
+            if d != FAR && occ.map_or(true, |o| !o[j as usize]) {
+                sc += ctx.lut.v[d as usize];
+            }
+        }
+        sc
+    };
+    let mut tr = tr0;
+    let mut best = (score_of(&tr0), tr0);
+    let mut xs = Vec::with_capacity(e - s + 1);
+    let mut ys = Vec::with_capacity(e - s + 1);
+    let mut ws = Vec::with_capacity(e - s + 1);
+    for _ in 0..3 {
+        xs.clear();
+        ys.clear();
+        ws.clear();
+        for x in &q[s..=e] {
+            let (d, j) = ctx.grid.lookup(&tr.apply(x));
+            if d != FAR && d < 60 && occ.map_or(true, |o| !o[j as usize]) {
+                let k = ctx.lut.v[d as usize] as f64;
+                xs.push(*x);
+                ys.push(t[j as usize]);
+                ws.push(k * k);
+            }
+        }
+        if xs.len() < 4 {
+            break;
+        }
+        let (nt, _) = superpose(&xs, &ys, Some(&ws));
+        let sc = score_of(&nt);
+        tr = nt;
+        if sc > best.0 + 1e-3 {
+            best = (sc, nt);
+        } else {
+            break;
+        }
+    }
+    best
+}
+
+fn core_span(q: &[V3], t: &[V3], pairs: &[(u32, u32)], tr: &Transform) -> (u32, u32) {
+    let mut lo = u32::MAX;
+    let mut hi = 0;
+    for &(i, j) in pairs {
+        if dist2(&tr.apply(&q[i as usize]), &t[j as usize]) < 16.0 {
+            lo = lo.min(j);
+            hi = hi.max(j);
+        }
+    }
+    if lo == u32::MAX {
+        return (u32::MAX, 0);
+    }
+    // tolerate small overlaps between neighbouring bodies
+    if hi - lo >= 10 {
+        (lo + 2, hi - 2)
+    } else {
+        (lo, hi)
+    }
+}
+
+/// Fill undefined (-1) band centres by linear interpolation/extrapolation.
+fn fill_centers(c: &mut [i32]) -> bool {
+    let def: Vec<usize> = (0..c.len()).filter(|&i| c[i] >= 0).collect();
+    if def.is_empty() {
+        return false;
+    }
+    let (f, l) = (def[0], *def.last().unwrap());
+    for i in 0..f {
+        c[i] = c[f] - (f - i) as i32;
+    }
+    for i in l + 1..c.len() {
+        c[i] = c[l] + (i - l) as i32;
+    }
+    for w in def.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        for i in a + 1..b {
+            c[i] = c[a] + ((c[b] - c[a]) as f64 * (i - a) as f64 / (b - a) as f64).round() as i32;
+        }
+    }
+    true
+}
+
+/// Keep only a longest strictly increasing subsequence of the defined (>= 0)
+/// centres (sequence-consistent nearest-residue map); others become -1.
+fn lis_centers(c: &mut [i32]) {
+    let idx: Vec<usize> = (0..c.len()).filter(|&i| c[i] >= 0).collect();
+    if idx.is_empty() {
+        return;
+    }
+    // patience sorting with predecessor links
+    let mut tails: Vec<usize> = Vec::new(); // positions in idx
+    let mut prev = vec![usize::MAX; idx.len()];
+    for (k, &i) in idx.iter().enumerate() {
+        let v = c[i];
+        let pos = tails.partition_point(|&t| c[idx[t]] < v);
+        if pos > 0 {
+            prev[k] = tails[pos - 1];
+        }
+        if pos == tails.len() {
+            tails.push(k);
+        } else {
+            tails[pos] = k;
+        }
+    }
+    let mut keep = vec![false; c.len()];
+    let mut k = *tails.last().unwrap();
+    loop {
+        keep[idx[k]] = true;
+        if prev[k] == usize::MAX {
+            break;
+        }
+        k = prev[k];
+    }
+    for (i, v) in c.iter_mut().enumerate() {
+        if !keep[i] {
+            *v = -1;
+        }
+    }
+}
+
+/// Refine a candidate superposition of residues s..=e onto the target
+/// (coordinates `t`, `tsoa`: possibly masked copies of the target).
+#[allow(clippy::too_many_arguments)]
+fn refine_placement(
+    ctx: &Ctx,
+    node: usize,
+    s: usize,
+    e: usize,
+    tr0: Transform,
+    t: &[V3],
+    tsoa: &SoA,
+    work: &mut DpWork,
+) -> Option<Placement> {
+    const BAND: usize = 14;
+    let q = &ctx.q.s.ca;
+    let n = t.len();
+    let len = e - s + 1;
+    let mut tr = tr0;
+    let mut best: Option<(Transform, f64, Vec<(u32, u32)>)> = None;
+    let mut pairs = Vec::new();
+    let mut x = Vec::with_capacity(len);
+    let mut centers = vec![-1i32; len];
+    for iter in 0..ctx.k.refine_iters {
+        x.clear();
+        x.extend(q[s..=e].iter().map(|p| tr.apply(p)));
+        if iter == 0 || best.is_none() || !ctx.k.band_later {
+            let (mut jmin, mut jmax) = (u32::MAX, 0u32);
+            for (k, p) in x.iter().enumerate() {
+                let (d, j) = ctx.grid.lookup(p);
+                if d != FAR && d < 70 {
+                    jmin = jmin.min(j);
+                    jmax = jmax.max(j);
+                    centers[k] = j as i32;
+                } else {
+                    centers[k] = -1;
+                }
+            }
+            if jmin == u32::MAX {
+                break;
+            }
+            let pad = 8usize;
+            let w0 = (jmin as usize).saturating_sub(pad);
+            let w1 = (jmax as usize + pad).min(n - 1);
+            if len * (w1 - w0 + 1) <= ctx.k.full_cells {
+                work.align_gap_open_f(&x, tsoa, w0, w1 + 1, ctx.inv_d02s as f32, -0.6, &mut pairs);
+            } else {
+                lis_centers(&mut centers);
+                if !fill_centers(&mut centers) {
+                    break;
+                }
+                work.align_band_f(&x, tsoa, &centers, ctx.k.band1, ctx.inv_d02s as f32, -0.6, &mut pairs);
+            }
+        } else {
+            // band around the previous alignment path
+            centers.iter_mut().for_each(|c| *c = -1);
+            for &(i, j) in &best.as_ref().unwrap().2 {
+                centers[i as usize - s] = j as i32;
+            }
+            if !fill_centers(&mut centers) {
+                break;
+            }
+            work.align_band_f(&x, tsoa, &centers, BAND, ctx.inv_d02s as f32, -0.6, &mut pairs);
+        }
+        if pairs.len() < 3 {
+            break;
+        }
+        for p in pairs.iter_mut() {
+            p.0 += s as u32;
+        }
+        let (ntr, raw) = irls(q, t, &pairs, tr, ctx.inv_d02, 3);
+        let gain = best.as_ref().map_or(f64::INFINITY, |b| raw - b.1);
+        tr = ntr;
+        if gain > 1e-6 {
+            best = Some((ntr, raw, pairs.clone()));
+        }
+        if gain < ctx.k.gain_stop * raw.max(1.0) {
+            break;
+        }
+    }
+    let (tr, raw, pairs) = best?;
+    let (ta, tb) = core_span(q, t, &pairs, &tr);
+    if ta == u32::MAX {
+        return None;
+    }
+    Some(Placement { node, tr, raw, ta, tb })
+}
+
+/// Exact selection of disjoint PUs with non-overlapping target spans.
+/// Returns indices into `cands`.
+fn assemble(cands: &[Placement], tree_masks: &[u32], n_leaves: usize, max_segments: usize, penalty: f64) -> Vec<usize> {
+    let nc = cands.len();
+    if nc == 0 {
+        return vec![];
+    }
+    let mut order: Vec<usize> = (0..nc).collect();
+    order.sort_by_key(|&c| (cands[c].tb, cands[c].ta));
+    let ends: Vec<u32> = order.iter().map(|&c| cands[c].tb).collect();
+    // prev[k] = number of sorted candidates whose end is < start of candidate k
+    let prev: Vec<usize> = order.iter().map(|&c| ends.partition_point(|&b| b < cands[c].ta)).collect();
+    let nm = 1usize << n_leaves;
+    let ks = max_segments.max(1);
+    let neg = f64::NEG_INFINITY;
+    let stride_k = nm;
+    let stride_i = (ks + 1) * nm;
+    let mut f = vec![neg; (nc + 1) * stride_i];
+    f[0] = 0.0;
+    for i in 1..=nc {
+        let c = order[i - 1];
+        let mc = tree_masks[cands[c].node] as usize;
+        let w = cands[c].raw;
+        let p = prev[i - 1];
+        let (before, cur) = f.split_at_mut(i * stride_i);
+        cur[..stride_i].copy_from_slice(&before[(i - 1) * stride_i..i * stride_i]);
+        for k in 1..=ks {
+            let pen = if k >= 2 { penalty } else { 0.0 };
+            let src = &before[p * stride_i + (k - 1) * stride_k..p * stride_i + k * stride_k];
+            let dst = &mut cur[k * stride_k..(k + 1) * stride_k];
+            // iterate over masks containing mc: sub = mask ^ mc ranges over masks disjoint from mc
+            let free = (nm - 1) & !mc;
+            let mut sub = free;
+            loop {
+                let v = src[sub];
+                if v != neg {
+                    let nv = v + w - pen;
+                    let slot = &mut dst[sub | mc];
+                    if nv > *slot {
+                        *slot = nv;
+                    }
+                }
+                if sub == 0 {
+                    break;
+                }
+                sub = (sub - 1) & free;
+            }
+        }
+    }
+    let base = nc * stride_i;
+    let (mut bk, mut bm, mut bv) = (0usize, 0usize, 0.0f64);
+    for k in 1..=ks {
+        for mask in 0..nm {
+            let v = f[base + k * stride_k + mask];
+            if v > bv {
+                bv = v;
+                bk = k;
+                bm = mask;
+            }
+        }
+    }
+    let mut chosen = Vec::new();
+    let (mut i, mut k, mut mask) = (nc, bk, bm);
+    while i > 0 && k > 0 {
+        let v = f[i * stride_i + k * stride_k + mask];
+        if v == f[(i - 1) * stride_i + k * stride_k + mask] {
+            i -= 1;
+            continue;
+        }
+        let c = order[i - 1];
+        chosen.push(c);
+        mask ^= tree_masks[cands[c].node] as usize;
+        k -= 1;
+        i = prev[i - 1];
+    }
+    chosen
+}
+
+/// One pass: chimera of the bodies in target order, aligned with the gdt2 DP.
+fn chimera_align(ctx: &Ctx, segs: &[Segment], keys: &[f64], work: &mut DpWork) -> Alignment {
+    let q = &ctx.q.s.ca;
+    let t = &ctx.t.s.ca;
+    let mut order: Vec<usize> = (0..segs.len()).collect();
+    order.sort_by(|&a, &b| keys[a].partial_cmp(&keys[b]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut chim: Vec<V3> = Vec::with_capacity(q.len());
+    let mut origin: Vec<(u32, u16)> = Vec::with_capacity(q.len());
+    for &si in &order {
+        let sg = &segs[si];
+        for i in sg.qs..=sg.qe {
+            chim.push(sg.tr.apply(&q[i]));
+            origin.push((i as u32, si as u16));
+        }
+    }
+    let mut pairs = Vec::new();
+    work.align_free_f(&chim, &ctx.tsoa, ctx.inv_d02s as f32, &mut pairs);
+    let mut raw = 0.0;
+    let mut out_pairs = Vec::with_capacity(pairs.len());
+    let mut out_seg = Vec::with_capacity(pairs.len());
+    for &(ci, tj) in &pairs {
+        raw += tm::kernel(dist2(&chim[ci as usize], &t[tj as usize]), ctx.inv_d02);
+        out_pairs.push((origin[ci as usize].0, tj));
+        out_seg.push(origin[ci as usize].1);
+    }
+    Alignment { segs: segs.to_vec(), order, pairs: out_pairs, pair_seg: out_seg, raw }
+}
+
+/// Chimera alignment, then re-superpose each body on its own pairs; iterate
+/// until the score stops improving.
+fn finalize(ctx: &Ctx, mut segs: Vec<Segment>, mut keys: Vec<f64>, work: &mut DpWork) -> Alignment {
+    let q = &ctx.q.s.ca;
+    let t = &ctx.t.s.ca;
+    let mut best = Alignment::default();
+    for iter in 0..ctx.k.fin_iters.max(1) {
+        let aln = chimera_align(ctx, &segs, &keys, work);
+        if aln.raw <= best.raw * (1.0 + 1e-5) + 1e-9 && iter > 0 {
+            break;
+        }
+        best = aln;
+        for (si, sg) in segs.iter_mut().enumerate() {
+            let sp: Vec<(u32, u32)> =
+                best.pairs.iter().zip(&best.pair_seg).filter(|(_, &s)| s as usize == si).map(|(p, _)| *p).collect();
+            if sp.len() >= 3 {
+                let (ntr, _) = irls(q, t, &sp, sg.tr, ctx.inv_d02, 3);
+                sg.tr = ntr;
+            }
+        }
+        keys = segment_keys_from(ctx, &segs, &best);
+    }
+    best
+}
+
+/// Median target position of the well-superposed pairs of each segment
+/// (segments without pairs keep their rank in the current order).
+fn segment_keys_from(ctx: &Ctx, segs: &[Segment], aln: &Alignment) -> Vec<f64> {
+    let q = &ctx.q.s.ca;
+    let t = &ctx.t.s.ca;
+    let mut keys = vec![0.0; segs.len()];
+    for (rank, &si) in aln.order.iter().enumerate() {
+        let tr = &segs[si].tr;
+        let mut js: Vec<u32> = aln
+            .pairs
+            .iter()
+            .zip(&aln.pair_seg)
+            .filter(|(&(i, j), &sg)| sg as usize == si && dist2(&tr.apply(&q[i as usize]), &t[j as usize]) < 25.0)
+            .map(|(&(_, j), _)| j)
+            .collect();
+        keys[si] = if js.is_empty() {
+            let own: Vec<u32> =
+                aln.pairs.iter().zip(&aln.pair_seg).filter(|(_, &sg)| sg as usize == si).map(|(&(_, j), _)| j).collect();
+            if own.is_empty() {
+                rank as f64 * t.len() as f64 / segs.len().max(1) as f64
+            } else {
+                own[own.len() / 2] as f64
+            }
+        } else {
+            js.sort_unstable();
+            js[js.len() / 2] as f64
+        };
+    }
+    keys
+}
+
+/// Try to move body `b` to a better place among the target residues not used
+/// by the other bodies. Returns the re-aligned solution if it scores higher.
+fn refit_body(ctx: &Ctx, aln: &Alignment, b: usize, cands_all: &[(usize, f64, Transform)], work: &mut DpWork) -> Option<Alignment> {
+    let q = &ctx.q.s.ca;
+    let t = &ctx.t.s.ca;
+    let (qs, qe) = (aln.segs[b].qs, aln.segs[b].qe);
+    let mut occ = vec![false; t.len()];
+    let mut own_raw = 0.0;
+    for (k, &(i, j)) in aln.pairs.iter().enumerate() {
+        let sg = aln.pair_seg[k] as usize;
+        let d2 = dist2(&aln.segs[sg].tr.apply(&q[i as usize]), &t[j as usize]);
+        if sg == b {
+            own_raw += tm::kernel(d2, ctx.inv_d02);
+        } else if d2 < 36.0 {
+            occ[j as usize] = true;
+        }
+    }
+    let tree = &ctx.q.tree;
+    let overlaps = |node: usize| -> bool {
+        let (s, e) = (tree.nodes[node].start, tree.nodes[node].end);
+        let lo = s.max(qs);
+        let hi = e.min(qe);
+        hi >= lo && 2 * (hi - lo + 1) >= (e - s + 1).min(qe - qs + 1)
+    };
+    // polish all candidate transforms of overlapping PUs on the free target
+    let mid = (qs + qe) / 2;
+    let mut polished: Vec<(f32, Transform)> = cands_all
+        .iter()
+        .filter(|(node, _, _)| overlaps(*node))
+        .map(|(_, _, tr)| quick_refine(ctx, qs, qe, *tr, Some(&occ)))
+        .collect();
+    polished.sort_by(|a, b| cmp_desc(a.0 as f64, b.0 as f64));
+    let far = [1.0e4, 1.0e4, 1.0e4];
+    let tmask: Vec<V3> = t.iter().zip(&occ).map(|(p, &o)| if o { far } else { *p }).collect();
+    let tmask_soa = SoA::new(&tmask);
+    let mut sigs: Vec<[V3; 3]> = vec![];
+    let mut best: Option<Placement> = None;
+    for (_, tr) in polished {
+        if sigs.len() >= ctx.k.refit_dp {
+            break;
+        }
+        let sig = [tr.apply(&q[qs]), tr.apply(&q[mid]), tr.apply(&q[qe])];
+        if sigs.iter().any(|o| (0..3).all(|k| dist2(&o[k], &sig[k]) < 16.0)) {
+            continue;
+        }
+        sigs.push(sig);
+        if let Some(pl) = refine_placement(ctx, 0, qs, qe, tr, &tmask, &tmask_soa, work) {
+            if best.as_ref().map_or(true, |bp| pl.raw > bp.raw) {
+                best = Some(pl);
+            }
+        }
+    }
+    let best = best?;
+    if best.raw <= own_raw + 0.5 {
+        return None;
+    }
+    let mut keys = segment_keys_from(ctx, &aln.segs, aln);
+    keys[b] = (best.ta as f64 + best.tb as f64) / 2.0;
+    let mut segs = aln.segs.clone();
+    segs[b].tr = best.tr;
+    let trial = chimera_align(ctx, &segs, &keys, work);
+    (trial.raw > aln.raw + 1e-6).then_some(trial)
+}
+
+/// Align a peeled query onto a rigid target. Returns (flexible, rigid).
+fn align_directional(q: &Prepared, t: &Prepared, lnorm: usize, p: &AlignParams, work: &mut DpWork) -> (Alignment, Alignment) {
+    let prof = std::env::var_os("ICARUS_PROFILE").is_some();
+    let clock = std::time::Instant::now();
+    let lap = |name: &str| {
+        if prof {
+            eprintln!("  [{:>8.3} ms] {name}", clock.elapsed().as_secs_f64() * 1e3);
+        }
+    };
+    let d0 = tm::d0(lnorm);
+    let d0s = tm::d0_search(lnorm);
+    let ctx = Ctx {
+        k: knobs(),
+        q,
+        t,
+        tsoa: SoA::new(&t.s.ca),
+        inv_d02: 1.0 / (d0 * d0),
+        inv_d02s: 1.0 / (d0s * d0s),
+        grid: DistGrid::build(&t.s.ca, 1.25, 7.5),
+        lut: KernelLut::new(d0.clamp(2.0, 5.0)),
+    };
+    let qca = &q.s.ca;
+    let tca = &t.s.ca;
+    let m = qca.len();
+    let tree = &q.tree;
+    let nn = tree.nodes.len();
+
+    // 1. seeds
+    let blocks = select_blocks(find_blocks(&q.frags, &t.frags, p.q_stride, p.frag_tol), m, p.max_seeds);
+    let mut transforms: Vec<Transform> = blocks.iter().map(|b| block_transform(qca, tca, b)).collect();
+    if transforms.is_empty() {
+        // no local similarity at all: fall back to centroid alignment
+        let cq = centroid(qca);
+        let ct = centroid(tca);
+        transforms.push(Transform { r: Transform::identity().r, t: [ct[0] - cq[0], ct[1] - cq[1], ct[2] - cq[2]] });
+    }
+    lap(&format!("grid + {} seed blocks", transforms.len()));
+
+    // 2. score every transform on every PU (prefix sums of grid kernels).
+    // Small PUs fit many places equally well locally, so they get a larger
+    // candidate budget (their refinement is also cheaper).
+    let limits: Vec<usize> = tree
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(ni, nd)| {
+            let f = ((m as f64) / (nd.len() as f64)).sqrt().clamp(1.0, 4.0);
+            let base = if ni == 0 { p.per_node + 1 } else { p.per_node };
+            ((base as f64) * f).round() as usize
+        })
+        .collect();
+    let keeps: Vec<usize> = limits.iter().map(|&l| l * 3).collect();
+    let mut top: Vec<Vec<(f32, u32)>> = keeps.iter().map(|&k| Vec::with_capacity(k + 1)).collect();
+    let stride = if ctx.k.score_stride > 0 { ctx.k.score_stride } else if m > 200 { 2 } else { 1 };
+    let mut prefix = vec![0f32; m + 1];
+    for (ti, tr) in transforms.iter().enumerate() {
+        let mut acc = 0f32;
+        for i in 0..m {
+            if i % stride == 0 {
+                let (d, _) = ctx.grid.lookup(&tr.apply(&qca[i]));
+                acc += ctx.lut.v[d as usize] * stride as f32;
+            }
+            prefix[i + 1] = acc;
+        }
+        for (ni, node) in tree.nodes.iter().enumerate() {
+            let sc = prefix[node.end + 1] - prefix[node.start];
+            let list = &mut top[ni];
+            let keep = keeps[ni];
+            if list.len() < keep || sc > list[list.len() - 1].0 {
+                let pos = list.partition_point(|&(v, _)| v >= sc);
+                list.insert(pos, (sc, ti as u32));
+                list.truncate(keep);
+            }
+        }
+    }
+    lap("seed scoring");
+
+    // 3. polish and refine candidates of each PU (parents first; the refined
+    // placements of a parent are also tried for its children)
+    let mut placements: Vec<Placement> = Vec::new();
+    let mut node_placements: Vec<Vec<usize>> = vec![Vec::new(); nn];
+    let mut refit_pool: Vec<(usize, f64, Transform)> = Vec::new();
+    for (ni, node) in tree.nodes.iter().enumerate() {
+        let (s, e) = (node.start, node.end);
+        let mid = (s + e) / 2;
+        let mut cands: Vec<Transform> = Vec::new();
+        if let Some(par) = node.parent {
+            cands.extend(node_placements[par].iter().take(2).map(|&k| placements[k].tr));
+        }
+        let n_inherited = cands.len();
+        cands.extend(top[ni].iter().map(|&(_, ti)| transforms[ti as usize]));
+        let mut polished: Vec<(f32, Transform)> = if ctx.k.icp {
+            let mut v: Vec<(f32, Transform)> = cands.into_iter().map(|tr| quick_refine(&ctx, s, e, tr, None)).collect();
+            v.sort_by(|a, b| cmp_desc(a.0 as f64, b.0 as f64));
+            v
+        } else {
+            cands.into_iter().map(|tr| (0.0, tr)).collect()
+        };
+        let mut sigs: Vec<[V3; 3]> = Vec::new();
+        let mut node_best: Vec<Placement> = Vec::new();
+        for (sc, tr) in polished {
+            if sigs.len() >= limits[ni] + n_inherited {
+                break;
+            }
+            let sig = [tr.apply(&qca[s]), tr.apply(&qca[mid]), tr.apply(&qca[e])];
+            if sigs.iter().any(|o| (0..3).all(|k| dist2(&o[k], &sig[k]) < ctx.k.sig2)) {
+                continue;
+            }
+            sigs.push(sig);
+            refit_pool.push((ni, sc as f64, tr));
+            if let Some(pl) = refine_placement(&ctx, ni, s, e, tr, tca, &ctx.tsoa, work) {
+                node_best.push(pl);
+            }
+        }
+        if std::env::var_os("ICARUS_PROFILE2").is_some() {
+            eprintln!("    node {ni} len {} limit {} refined {} t={:.3}ms", e - s + 1, limits[ni], sigs.len(), clock.elapsed().as_secs_f64() * 1e3);
+        }
+        // drop duplicates that converged to the same placement
+        node_best.sort_by(|a, b| cmp_desc(a.raw, b.raw));
+        let mut kept: Vec<Placement> = Vec::new();
+        for pl in node_best {
+            let dup = kept.iter().any(|k| {
+                dist2(&k.tr.apply(&qca[mid]), &pl.tr.apply(&qca[mid])) < 4.0 && k.tr.rotation_angle_to(&pl.tr) < 0.2
+            });
+            if !dup {
+                kept.push(pl);
+            }
+        }
+        let best_raw = kept.first().map_or(0.0, |p| p.raw);
+        for pl in kept {
+            if pl.raw < ctx.k.prune * best_raw {
+                continue;
+            }
+            node_placements[ni].push(placements.len());
+            placements.push(pl);
+        }
+    }
+    lap(&format!("refined {} placements over {} PUs", placements.len(), nn));
+
+    // rigid solution: best whole-chain placement
+    let rigid = match node_placements[0].first() {
+        Some(&k) => {
+            let pl = &placements[k];
+            finalize(&ctx, vec![Segment { qs: 0, qe: m - 1, tr: pl.tr }], vec![pl.ta as f64], work)
+        }
+        None => Alignment::default(),
+    };
+    lap("rigid finalize");
+    if tree.nodes.len() <= 1 || placements.is_empty() {
+        return (rigid.clone(), rigid);
+    }
+
+    // 4. assemble rigid bodies
+    let masks: Vec<u32> = tree.nodes.iter().map(|n| n.leaf_mask).collect();
+    let penalty = p.hinge_penalty * lnorm as f64;
+    let chosen = assemble(&placements, &masks, tree.leaves.len(), p.max_segments, penalty);
+    if chosen.is_empty() {
+        return (rigid.clone(), rigid);
+    }
+    let mut segs: Vec<(Segment, f64)> = chosen
+        .iter()
+        .map(|&c| {
+            let pl = &placements[c];
+            let nd = &tree.nodes[pl.node];
+            (Segment { qs: nd.start, qe: nd.end, tr: pl.tr }, (pl.ta as f64 + pl.tb as f64) / 2.0)
+        })
+        .collect();
+    segs.sort_by_key(|(s, _)| s.qs);
+    // attach unplaced residues (PUs without a placement) to a neighbouring body
+    attach_gaps(&ctx, &mut segs, m);
+    lap(&format!("assembly ({} bodies)", segs.len()));
+    let keys: Vec<f64> = segs.iter().map(|(_, k)| *k).collect();
+    let segs: Vec<Segment> = segs.into_iter().map(|(s, _)| s).collect();
+    let mut flex = finalize(&ctx, segs, keys, work);
+    lap(&format!("flex finalize raw={:.2}", flex.raw));
+
+    // 5. refit bodies against the free target
+    if p.refit && flex.segs.len() > 1 {
+        let mut changed = false;
+        for _round in 0..ctx.k.refit_rounds {
+            let mut improved = false;
+            for b in 0..flex.segs.len() {
+                if let Some(trial) = refit_body(&ctx, &flex, b, &refit_pool, work) {
+                    flex = trial;
+                    improved = true;
+                    changed = true;
+                }
+            }
+            if !improved {
+                break;
+            }
+        }
+        if changed {
+            let keys = segment_keys_from(&ctx, &flex.segs, &flex);
+            let refined = finalize(&ctx, flex.segs.clone(), keys, work);
+            if refined.raw > flex.raw {
+                flex = refined;
+            }
+        }
+        lap(&format!("refit raw={:.2}", flex.raw));
+    }
+    if flex.raw >= rigid.raw {
+        (flex, rigid)
+    } else {
+        (rigid.clone(), rigid)
+    }
+}
+
+fn centroid(x: &[V3]) -> V3 {
+    let mut c = [0.0; 3];
+    for p in x {
+        for k in 0..3 {
+            c[k] += p[k];
+        }
+    }
+    let n = x.len().max(1) as f64;
+    [c[0] / n, c[1] / n, c[2] / n]
+}
+
+/// Extend bodies over query residues not covered by any chosen PU, choosing
+/// for each gap the split between neighbouring bodies that superposes best.
+fn attach_gaps(ctx: &Ctx, segs: &mut [(Segment, f64)], m: usize) {
+    let q = &ctx.q.s.ca;
+    let score = |tr: &Transform, a: usize, b: usize| -> f32 {
+        (a..=b).map(|i| ctx.lut.v[ctx.grid.lookup(&tr.apply(&q[i])).0 as usize]).sum()
+    };
+    let k = segs.len();
+    if k == 0 {
+        return;
+    }
+    if segs[0].0.qs > 0 {
+        segs[0].0.qs = 0;
+    }
+    for i in 0..k - 1 {
+        let gap_s = segs[i].0.qe + 1;
+        let gap_e = segs[i + 1].0.qs;
+        if gap_e <= gap_s {
+            continue;
+        }
+        let gap_e = gap_e - 1;
+        let mut best = (f32::MIN, gap_s);
+        for cut in gap_s..=gap_e + 1 {
+            let left = if cut > gap_s { score(&segs[i].0.tr, gap_s, cut - 1) } else { 0.0 };
+            let right = if cut <= gap_e { score(&segs[i + 1].0.tr, cut, gap_e) } else { 0.0 };
+            if left + right > best.0 {
+                best = (left + right, cut);
+            }
+        }
+        segs[i].0.qe = best.1 - 1;
+        segs[i + 1].0.qs = best.1;
+    }
+    if segs[k - 1].0.qe < m - 1 {
+        segs[k - 1].0.qe = m - 1;
+    }
+}
+
+/// Align two prepared structures (ICARUS flexible alignment).
+pub fn align_pair(a: &Prepared, b: &Prepared, p: &AlignParams, work: &mut DpWork) -> PairResult {
+    let lnorm = a.len().min(b.len());
+    let (f1, r1) = align_directional(a, b, lnorm, p, work);
+    let mut res = PairResult {
+        flex: f1,
+        rigid: r1,
+        reversed: false,
+        rigid_reversed: false,
+        len1: a.len(),
+        len2: b.len(),
+        lnorm,
+    };
+    if p.both_directions {
+        let (f2, r2) = align_directional(b, a, lnorm, p, work);
+        if f2.raw > res.flex.raw {
+            res.flex = f2;
+            res.reversed = true;
+        }
+        if r2.raw > res.rigid.raw {
+            res.rigid = r2;
+            res.rigid_reversed = true;
+        }
+    }
+    res
+}
