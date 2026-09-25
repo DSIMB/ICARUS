@@ -26,6 +26,13 @@ def level(lq, lt):
     return "family"
 
 
+def strip_ext(name):
+    for ext in (".gz", ".pdb", ".cif", ".ent"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+    return name
+
+
 def load_scores(spec):
     parts = spec.split(":")
     path, col = parts[0], parts[1]
@@ -44,8 +51,11 @@ def load_scores(spec):
             ci = int(col)
             for line in f:
                 p = line.rstrip("\n").split("\t")
-                q, t = p[0].split(".")[0], p[1].split(".")[0]
-                v = float(p[ci])
+                q, t = strip_ext(p[0]), strip_ext(p[1])
+                try:
+                    v = float(p[ci])
+                except ValueError:
+                    continue
                 if v > scores.get((q, t), float("-inf")):
                     scores[(q, t)] = v
     # symmetric scores (e.g. all-vs-all within one database) may be stored in

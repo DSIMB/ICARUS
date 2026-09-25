@@ -167,6 +167,10 @@ enum Cmd {
         /// Only report pairs with a flexible TM-score >= this value
         #[arg(long, default_value_t = 0.0)]
         min_tm: f64,
+        /// Only report pairs with a connectivity-aware TM-score (tm_conn,
+        /// normalised by the longer chain) >= this value
+        #[arg(long, default_value_t = 0.0)]
+        min_conn: f64,
         /// Add a column with the superposition of every rigid body
         #[arg(long)]
         transforms: bool,
@@ -349,6 +353,7 @@ fn main() -> Result<()> {
             pairs,
             output: out,
             min_tm,
+            min_conn,
             transforms,
             threads,
             opts,
@@ -433,7 +438,7 @@ fn main() -> Result<()> {
                         let (a, b) = (&qs[i], &tset[j]);
                         let ts = Instant::now();
                         let r = align_pair(a, b, &ap, work);
-                        if r.tm_flex() < min_tm {
+                        if r.tm_flex() < min_tm || r.tm_conn() < min_conn {
                             return None;
                         }
                         Some(format!(

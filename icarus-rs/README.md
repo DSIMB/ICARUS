@@ -47,13 +47,27 @@ Main options: `--max-bodies` (maximum number of rigid bodies, default 6),
 
 | column | meaning |
 |---|---|
-| `tm_flex` | flexible TM-score normalised by the shorter chain (the ICARUS score) |
+| `tm_flex` | flexible TM-score normalised by the shorter chain (the ICARUS alignment score) |
 | `tm_flex_q`, `tm_flex_t` | same alignment normalised by query / target length |
 | `tm_rigid` | best rigid-body TM-score found (normalised by the shorter chain) |
+| `tm_rigid_max` | rigid TM-score normalised by the longer chain |
+| `tm_conn` | connectivity-aware flexible TM-score, normalised by the longer chain (see below) |
+| `n_conn` | rigid bodies in the connected run scored by `tm_conn` |
 | `n_bodies` | number of rigid bodies (PUs) in the flexible solution |
 | `n_aligned`, `n_core`, `rmsd_core` | aligned pairs, pairs within 5 Å, their RMSD |
 | `peeled` | which structure was cut into PUs (1 or 2) |
 | `bodies` | `qstart-qend:tstart-tend` per body, in target order (author numbering) |
+| `transforms` | (`search --transforms`) per-body rotation + translation |
+
+**Which score for what.** `tm_flex` measures how well two structures can be
+superposed when their PUs move independently; it is the right score to
+compare alignments of related proteins (the ICARUS benchmarks), but with up to
+six free bodies it is inflated for unrelated proteins (small PUs always find
+some place to fit). For database searches and homology decisions use
+`tm_conn`: it only credits runs of sequence-consecutive bodies whose junctions
+stay chain-connected in the rigid partner — true for hinge motions and circular
+permutations, false for bodies scattered over an unrelated fold — and is
+normalised by the longer chain. It is never lower than `tm_rigid_max`.
 
 ## Algorithm
 
