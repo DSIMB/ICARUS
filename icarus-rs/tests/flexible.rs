@@ -141,3 +141,24 @@ fn lectin_circular_permutation_pair() {
     assert!(r.tm_rigid() < 0.6, "rigid TM {}", r.tm_rigid());
     assert!(r.tm_flex() > 0.85, "flexible TM {}", r.tm_flex());
 }
+
+#[test]
+fn zero_budgets_do_not_panic() {
+    let p = AlignParams {
+        per_node: 0,
+        max_seeds: 0,
+        ..AlignParams::default()
+    };
+    let mut w = DpWork::default();
+    let r = align_pair(
+        &prep(load("d1nls__.pdb")),
+        &prep(load("d2bqpa_.pdb")),
+        &p,
+        &mut w,
+    );
+    assert!(
+        r.tm_flex() >= 0.0 && r.tm_flex() <= 1.0,
+        "flexible TM {}",
+        r.tm_flex()
+    );
+}

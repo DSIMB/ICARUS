@@ -934,7 +934,8 @@ fn align_directional(
         .enumerate()
         .map(|(ni, nd)| {
             let f = ((m as f64) / (nd.len() as f64)).sqrt().clamp(1.0, 4.0);
-            let base = if ni == 0 { p.per_node + 1 } else { p.per_node };
+            let per_node = p.per_node.max(1);
+            let base = if ni == 0 { per_node + 1 } else { per_node };
             ((base as f64) * f).round() as usize
         })
         .collect();

@@ -80,12 +80,12 @@ impl AlignOpts {
                 hinge_penalty: self.hinge_penalty,
                 q_stride: self.seed_stride.max(1),
                 max_seeds: if self.fast {
-                    self.max_seeds.min(800)
+                    self.max_seeds.clamp(1, 800)
                 } else {
                     self.max_seeds.max(1)
                 },
                 per_node: if self.fast {
-                    self.per_pu.min(2)
+                    self.per_pu.clamp(1, 2)
                 } else {
                     self.per_pu.max(1)
                 },
