@@ -53,3 +53,14 @@ icarus createdb SCOP40_DIR scop40.icdb
 icarus search scop40.icdb scop40.icdb --pairs data/scop40_bench_pairs.tsv -o icarus2.tsv
 python3 eval_scop.py data/scop40_labels.tsv data/scop40_bench_pairs.tsv icarus2.tsv:tm_rigid_max icarus2.tsv:tm_conn
 ```
+
+## Figures
+
+`plot_figures.py` (needs matplotlib) draws the figures in `figures/` from the
+outputs above: quality versus speed on RIPC and SISY, ICARUS 2 versus v1,
+SCOP40 discrimination and score distributions, and a proteome run.
+
+```bash
+python3 plot_figures.py --ripc RIPC_OUT --sisy SISY_OUT --scop-icarus icarus2.tsv \
+    --scop-foldseek foldseek.m8 --ecoli flexible_alignments.tsv --out figures/
+```
