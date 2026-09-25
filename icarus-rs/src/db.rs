@@ -8,7 +8,7 @@
 //! Layout (little endian): magic "ICDB", u32 version, u32 count, then records.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -74,59 +74,94 @@ impl<'a> Rd<'a> {
     }
 }
 
+/// Streaming `.icdb` writer: records are appended one at a time and the
+/// record count in the header is patched by `finish`, so large collections
+/// never need to be held in memory at once.
+pub struct DbWriter {
+    w: BufWriter<File>,
+    count: u32,
+}
+
+impl DbWriter {
+    pub fn create(path: &Path) -> Result<Self> {
+        let mut w = BufWriter::new(
+            File::create(path).with_context(|| format!("cannot create {}", path.display()))?,
+        );
+        w.write_all(MAGIC)?;
+        w_u32(&mut w, VERSION)?;
+        w_u32(&mut w, 0)?;
+        Ok(Self { w, count: 0 })
+    }
+
+    pub fn push(&mut self, p: &Prepared) -> Result<()> {
+        write_record(&mut self.w, p)?;
+        self.count += 1;
+        Ok(())
+    }
+
+    /// Writes the record count into the header and flushes; returns the count.
+    pub fn finish(self) -> Result<u32> {
+        let mut f = self.w.into_inner().map_err(|e| e.into_error())?;
+        f.seek(SeekFrom::Start(8))?;
+        f.write_all(&self.count.to_le_bytes())?;
+        f.flush()?;
+        Ok(self.count)
+    }
+}
+
 pub fn write_db(path: &Path, items: &[Prepared]) -> Result<()> {
-    let mut w = BufWriter::new(
-        File::create(path).with_context(|| format!("cannot create {}", path.display()))?,
-    );
-    w.write_all(MAGIC)?;
-    w_u32(&mut w, VERSION)?;
-    w_u32(&mut w, items.len() as u32)?;
+    let mut w = DbWriter::create(path)?;
     for p in items {
-        let s = &p.s;
-        w_str(&mut w, &s.name)?;
-        w_str(&mut w, &s.chain)?;
-        w_u32(&mut w, s.len() as u32)?;
-        w.write_all(&s.seq)?;
-        for r in &s.resn {
-            w.write_all(r)?;
-        }
-        for r in &s.resid {
-            w_i32(&mut w, r.num)?;
-            w_u8(&mut w, r.icode)?;
-        }
-        for c in &s.ca {
-            for &v in c {
-                w_f32(&mut w, v as f32)?;
-            }
-        }
-        for &b in &s.bfac {
-            w_f32(&mut w, b)?;
-        }
-        for &c in &p.ss {
-            w_u8(&mut w, c as u8)?;
-        }
-        let t = &p.tree;
-        w_u16(&mut w, t.nodes.len() as u16)?;
-        for n in &t.nodes {
-            w_u32(&mut w, n.start as u32)?;
-            w_u32(&mut w, n.end as u32)?;
-            w_u16(&mut w, n.depth as u16)?;
-            w_i32(&mut w, n.parent.map_or(-1, |x| x as i32))?;
-            w_u32(&mut w, n.leaf_mask)?;
-        }
-        w_u16(&mut w, t.leaves.len() as u16)?;
-        for &l in &t.leaves {
-            w_u16(&mut w, l as u16)?;
-        }
-        w_u16(&mut w, t.levels.len() as u16)?;
-        for lv in &t.levels {
-            w_u16(&mut w, lv.len() as u16)?;
-            for &x in lv {
-                w_u16(&mut w, x as u16)?;
-            }
+        w.push(p)?;
+    }
+    w.finish()?;
+    Ok(())
+}
+
+fn write_record<W: Write>(w: &mut W, p: &Prepared) -> Result<()> {
+    let s = &p.s;
+    w_str(w, &s.name)?;
+    w_str(w, &s.chain)?;
+    w_u32(w, s.len() as u32)?;
+    w.write_all(&s.seq)?;
+    for r in &s.resn {
+        w.write_all(r)?;
+    }
+    for r in &s.resid {
+        w_i32(w, r.num)?;
+        w_u8(w, r.icode)?;
+    }
+    for c in &s.ca {
+        for &v in c {
+            w_f32(w, v as f32)?;
         }
     }
-    w.flush()?;
+    for &b in &s.bfac {
+        w_f32(w, b)?;
+    }
+    for &c in &p.ss {
+        w_u8(w, c as u8)?;
+    }
+    let t = &p.tree;
+    w_u16(w, t.nodes.len() as u16)?;
+    for n in &t.nodes {
+        w_u32(w, n.start as u32)?;
+        w_u32(w, n.end as u32)?;
+        w_u16(w, n.depth as u16)?;
+        w_i32(w, n.parent.map_or(-1, |x| x as i32))?;
+        w_u32(w, n.leaf_mask)?;
+    }
+    w_u16(w, t.leaves.len() as u16)?;
+    for &l in &t.leaves {
+        w_u16(w, l as u16)?;
+    }
+    w_u16(w, t.levels.len() as u16)?;
+    for lv in &t.levels {
+        w_u16(w, lv.len() as u16)?;
+        for &x in lv {
+            w_u16(w, x as u16)?;
+        }
+    }
     Ok(())
 }
 

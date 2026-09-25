@@ -9,7 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use rayon::prelude::*;
 
 use icarus::align::{align_pair, AlignParams};
-use icarus::db::{read_db, write_db};
+use icarus::db::{read_db, DbWriter};
 use icarus::dp::DpWork;
 use icarus::output;
 use icarus::prep::{prepare, PrepParams, Prepared};
@@ -343,21 +343,37 @@ fn main() -> Result<()> {
             let (pp, _) = opts.params();
             let files = collect_files(&input)?;
             let t0 = Instant::now();
-            let items: Vec<Prepared> = files
-                .par_iter()
-                .filter_map(|p| match load(p, None, false, &opts) {
-                    Ok(s) => Some(prepare(s, &pp)),
-                    Err(e) => {
-                        eprintln!("warning: {}: {e:#}", p.display());
-                        None
-                    }
-                })
-                .collect();
-            write_db(&output, &items)?;
-            let nres: usize = items.iter().map(|p| p.len()).sum();
+            // chunks bound memory on large collections (e.g. all of Swiss-Prot)
+            let mut db = DbWriter::create(&output)?;
+            let mut nres = 0usize;
+            for (ci, chunk) in files.chunks(20_000).enumerate() {
+                let items: Vec<Prepared> = chunk
+                    .par_iter()
+                    .filter_map(|p| match load(p, None, false, &opts) {
+                        Ok(s) => Some(prepare(s, &pp)),
+                        Err(e) => {
+                            eprintln!("warning: {}: {e:#}", p.display());
+                            None
+                        }
+                    })
+                    .collect();
+                for p in &items {
+                    nres += p.len();
+                    db.push(p)?;
+                }
+                if files.len() > 20_000 {
+                    eprintln!(
+                        "  {}/{} files ({:.0} s)",
+                        (ci * 20_000 + chunk.len()),
+                        files.len(),
+                        t0.elapsed().as_secs_f64()
+                    );
+                }
+            }
+            let n = db.finish()?;
             eprintln!(
                 "{} structures ({} residues) preprocessed in {:.2} s -> {}",
-                items.len(),
+                n,
                 nres,
                 t0.elapsed().as_secs_f64(),
                 output.display()

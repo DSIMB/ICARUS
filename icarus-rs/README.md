@@ -42,6 +42,32 @@ icarus search proteome.icdb proteome.icdb --pairs hits.m8 -o flexible.tsv --min-
 `pipeline/proteome_flexdb.sh STRUCT_DIR OUT_DIR [threads] [min_plddt] [min_rigid_tm]`
 runs the whole flow (preprocessing, Foldseek prefilter, flexible alignment).
 
+### AlphaFold DB sets on a large machine
+
+`pipeline/afdb_flexdb.sh` downloads AlphaFold DB bulk archives and runs the
+same flow in a resumable way (alignment in chunks, restartable after an
+interruption):
+
+```bash
+export ICARUS=$PWD/target/release/icarus FOLDSEEK=/path/to/foldseek THREADS=64
+pipeline/afdb_flexdb.sh list                                  # archives, sizes, species
+pipeline/afdb_flexdb.sh fetch swissprot /data/afdb            # 550k models, 28.6 GB
+pipeline/afdb_flexdb.sh run /data/afdb/swissprot /data/icarus/swissprot
+pipeline/afdb_flexdb.sh fetch proteome UP000005640 /data/afdb  # e.g. human
+pipeline/afdb_flexdb.sh fetch proteomes /data/afdb            # all 46 proteome archives
+```
+
+Settings are environment variables (`PLDDT`, `MAX_EVALUE`, `MAX_SEQS`,
+`CHUNK`, `MIN_RIGID`, `ICARUS_ARGS`, `FOLDSEEK_ARGS`); see the script header.
+`icarus search` holds the preprocessed database in memory: about 60–70 KB per
+AlphaFold model (≈40 GB for Swiss-Prot), whereas `createdb` works in chunks.
+Alignment costs ≈45 ms per pair per core in database mode; the script prints
+the number of candidate pairs and the expected core-hours before aligning.
+The whole AFDB (≈214 M models, distributed through Google Cloud, see
+https://alphafold.ebi.ac.uk/download) is best processed proteome by proteome
+or on cluster representatives (e.g. the 2.3 M Foldseek clusters of the AFDB),
+since one `search` database of N models needs ≈70 KB × N of memory.
+
 Main options: `--max-bodies` (maximum number of rigid bodies, default 6),
 `--hinge-penalty` (TM-score cost per extra body), `--min-pu-size` (default 15),
 `--one-direction` (peel only the first structure; ~2× faster), `--fast`
@@ -68,8 +94,19 @@ shuffled β-α units.
 | `n_bodies` | number of rigid bodies (PUs) in the flexible solution |
 | `n_aligned`, `n_core`, `rmsd_core` | aligned pairs, pairs within 5 Å, their RMSD |
 | `peeled` | which structure was cut into PUs (1 or 2) |
-| `bodies` | `qstart-qend:tstart-tend` per body, in target order (author numbering) |
-| `transforms` | (`search --transforms`) per-body rotation + translation |
+| `bodies` | `start-end:start-end` per body (peeled structure first, author numbering), in target order |
+| `conn_peeled`, `conn_bodies` | the same for the connected run scored by `tm_conn` |
+| `transforms` | (`search --transforms`) per-body rotation + translation of the flexible solution |
+
+**Rigid bodies.** A *body* is a piece of the peeled protein (one Protein
+Unit, or several neighbouring PUs kept together) that is moved by a single
+rotation + translation onto the other protein. A 1-body solution is an
+ordinary rigid superposition; a 2-body solution typically is two domains
+around a hinge; bodies placed out of sequence order along the other protein
+describe circular permutations or domain swaps. `bodies` gives the flexible
+solution (the one scored by `tm_flex`). `tm_conn` is maximised over all
+solutions examined, with the same hinge penalty, and `conn_bodies` lists the
+bodies of the connected run it scores (often the same bodies).
 
 **Which score for what.** `tm_flex` measures how well two structures
 superpose when their PUs move independently: it is the score to compare

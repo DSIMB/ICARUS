@@ -17,18 +17,6 @@ pub struct Stats {
     pub n_core: usize,
     pub rmsd_core: f64,
     pub seq_id: f64,
-    /// TM-score (normalised by the longer chain) of the best run of
-    /// sequence-consecutive bodies whose junctions preserve chain connectivity.
-    pub tm_conn: f64,
-    /// Number of bodies in that run.
-    pub n_conn: usize,
-}
-
-/// Raw kernel sum (d0 of the longer chain) of the best run of connected,
-/// sequence-consecutive bodies, and the run length.
-fn connected_run(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> (f64, usize) {
-    let lmax = moving.len().max(fixed.len());
-    crate::align::connected_run(aln, &moving.s.ca, &fixed.s.ca, 1.0 / tm::d0(lmax).powi(2))
 }
 
 /// `moving` is the segmented protein of the alignment, `fixed` the other one.
@@ -57,10 +45,7 @@ pub fn stats(aln: &Alignment, moving: &Prepared, fixed: &Prepared, lnorm: usize)
             }
         }
     }
-    let (conn_raw, n_conn) = connected_run(aln, moving, fixed);
     Stats {
-        tm_conn: conn_raw / lq.max(lt) as f64,
-        n_conn,
         tm_min: s0 / lnorm as f64,
         tm_q: sq / lq as f64,
         tm_t: st / lt as f64,
@@ -81,8 +66,18 @@ pub fn stats(aln: &Alignment, moving: &Prepared, fixed: &Prepared, lnorm: usize)
 
 /// Segment description "qstart-qend:tstart-tend" in author numbering.
 pub fn segments_string(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> String {
+    bodies_string(aln, &aln.order, moving, fixed)
+}
+
+/// Like `segments_string`, for the bodies `idx` of the alignment, in that order.
+pub fn bodies_string(
+    aln: &Alignment,
+    idx: &[usize],
+    moving: &Prepared,
+    fixed: &Prepared,
+) -> String {
     let mut out = String::new();
-    for &si in &aln.order {
+    for &si in idx {
         let sg = &aln.segs[si];
         let tj: Vec<u32> = aln
             .pairs
@@ -109,7 +104,7 @@ pub fn segments_string(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> 
 }
 
 pub const TSV_HEADER: &str =
-    "query\ttarget\tlen_q\tlen_t\ttm_flex\ttm_flex_q\ttm_flex_t\ttm_rigid\ttm_rigid_max\ttm_conn\tn_conn\tn_bodies\tn_aligned\tn_core\trmsd_core\tseq_id\tpeeled\tbodies";
+    "query\ttarget\tlen_q\tlen_t\ttm_flex\ttm_flex_q\ttm_flex_t\ttm_rigid\ttm_rigid_max\ttm_conn\tn_conn\tn_bodies\tn_aligned\tn_core\trmsd_core\tseq_id\tpeeled\tbodies\tconn_peeled\tconn_bodies";
 
 /// Rigid TM-score normalised by the longer chain (the homology score).
 pub fn tm_rigid_max(r: &PairResult, a: &Prepared, b: &Prepared) -> f64 {
@@ -131,8 +126,27 @@ pub fn tsv_line(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
         (st.tm_q, st.tm_t)
     };
     let rigid_max = tm_rigid_max(r, a, b);
+    // the connected run behind tm_conn; when no multi-body run beats the rigid
+    // superposition, that superposition is the connected solution
+    let (tm_conn, n_conn, conn_peeled, conn_bodies) = if r.tm_conn() > rigid_max {
+        let (cm, cf) = if r.conn_reversed { (b, a) } else { (a, b) };
+        (
+            r.tm_conn(),
+            r.conn.segs.len(),
+            if r.conn_reversed { 2 } else { 1 },
+            bodies_string(&r.conn.aln, &r.conn.segs, cm, cf),
+        )
+    } else {
+        let (rm, rf) = if r.rigid_reversed { (b, a) } else { (a, b) };
+        (
+            rigid_max,
+            1,
+            if r.rigid_reversed { 2 } else { 1 },
+            segments_string(&r.rigid, rm, rf),
+        )
+    };
     format!(
-        "{}\t{}\t{}\t{}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}\t{}\t{}\t{}\t{:.2}\t{:.3}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}\t{}\t{}\t{}\t{:.2}\t{:.3}\t{}\t{}\t{}\t{}",
         a.s.name,
         b.s.name,
         a.len(),
@@ -142,15 +156,17 @@ pub fn tsv_line(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
         tm_t,
         r.tm_rigid(),
         rigid_max,
-        r.tm_conn().max(rigid_max),
-        r.conn_n,
+        tm_conn,
+        n_conn,
         r.flex.segs.len(),
         st.n_aligned,
         st.n_core,
         st.rmsd_core,
         st.seq_id,
         if r.reversed { 2 } else { 1 },
-        segments_string(&r.flex, mv, fx)
+        segments_string(&r.flex, mv, fx),
+        conn_peeled,
+        conn_bodies
     )
 }
 

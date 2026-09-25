@@ -99,17 +99,33 @@ pub struct PairResult {
     pub len1: usize,
     pub len2: usize,
     pub lnorm: usize,
-    /// Best connected-run score over all candidate solutions (raw kernel sum
-    /// with d0 of the longer chain) and its number of bodies.
-    pub conn_raw: f64,
-    pub conn_n: usize,
+    /// Best connected run over all candidate solutions (see `ConnRun`).
+    pub conn: ConnRun,
+    /// The connected run comes from the second structure being peeled.
+    pub conn_reversed: bool,
+}
+
+/// The best run of sequence-consecutive, chain-connected bodies found among
+/// the candidate solutions of one direction. Runs are compared by their raw
+/// score minus the hinge penalty per extra body, so with a penalty the run is
+/// as parsimonious as the reported flexible solution.
+#[derive(Debug, Clone, Default)]
+pub struct ConnRun {
+    /// Raw kernel sum (d0 of the longer chain) of the run.
+    pub raw: f64,
+    /// `raw` minus the hinge penalty per extra body (selection criterion).
+    pub score: f64,
+    /// The solution the run belongs to and the indices of its bodies (in
+    /// sequence order).
+    pub aln: Alignment,
+    pub segs: Vec<usize>,
 }
 
 impl PairResult {
     /// Connectivity-aware flexible TM-score, normalised by the longer chain
     /// (a detection score: never below the rigid TM-score of the longer chain).
     pub fn tm_conn(&self) -> f64 {
-        self.conn_raw / self.len1.max(self.len2) as f64
+        self.conn.raw / self.len1.max(self.len2) as f64
     }
     pub fn tm_flex(&self) -> f64 {
         self.flex.raw / self.lnorm as f64
@@ -705,11 +721,12 @@ fn junction_ok(d: f64, sep: usize) -> bool {
 }
 
 /// Raw kernel sum (with `inv_d02`) of the best run of sequence-consecutive
-/// bodies whose junctions preserve chain connectivity, and its length.
+/// bodies whose junctions preserve chain connectivity, and the indices of its
+/// bodies in sequence order.
 /// Genuine flexibility (hinges, and also circular permutations, whose new
 /// termini are spatially adjacent) keeps chains connected, whereas bodies
 /// scattered over unrelated structures do not.
-pub fn connected_run(aln: &Alignment, q: &[V3], t: &[V3], inv_d02: f64) -> (f64, usize) {
+pub fn connected_run(aln: &Alignment, q: &[V3], t: &[V3], inv_d02: f64) -> (f64, Vec<usize>) {
     let nb = aln.segs.len();
     let mut raw = vec![0.0; nb];
     let mut first: Vec<Option<(u32, u32)>> = vec![None; nb];
@@ -729,8 +746,8 @@ pub fn connected_run(aln: &Alignment, q: &[V3], t: &[V3], inv_d02: f64) -> (f64,
     }
     let mut by_start: Vec<usize> = (0..nb).collect();
     by_start.sort_by_key(|&b| aln.segs[b].qs);
-    let (mut best, mut best_n) = (0.0f64, 0usize);
-    let (mut cur, mut cur_n) = (0.0f64, 0usize);
+    let (mut best, mut best_run) = (0.0f64, 0..0);
+    let (mut cur, mut cur_start) = (0.0f64, 0usize);
     for (k, &b) in by_start.iter().enumerate() {
         let connected = k > 0 && {
             let a = by_start[k - 1];
@@ -744,17 +761,16 @@ pub fn connected_run(aln: &Alignment, q: &[V3], t: &[V3], inv_d02: f64) -> (f64,
         };
         if connected {
             cur += raw[b];
-            cur_n += 1;
         } else {
             cur = raw[b];
-            cur_n = 1;
+            cur_start = k;
         }
         if cur > best {
             best = cur;
-            best_n = cur_n;
+            best_run = cur_start..k + 1;
         }
     }
-    (best, best_n)
+    (best, by_start[best_run].to_vec())
 }
 
 /// Median target position of the well-superposed pairs of each segment
@@ -879,7 +895,7 @@ fn align_directional(
     lnorm: usize,
     p: &AlignParams,
     work: &mut DpWork,
-) -> (Alignment, Alignment, (f64, usize)) {
+) -> (Alignment, Alignment, ConnRun) {
     let prof = std::env::var_os("ICARUS_PROFILE").is_some();
     let clock = std::time::Instant::now();
     let lap = |name: &str| {
@@ -1049,16 +1065,26 @@ fn align_directional(
         None => Alignment::default(),
     };
     lap("rigid finalize");
-    // connectivity-aware score, maximised over every solution examined
+    // connectivity-aware score, maximised over every solution examined (with
+    // the same hinge penalty per extra body as the flexible solution)
     let lmax = q.len().max(t.len());
     let inv_d02_max = 1.0 / tm::d0(lmax).powi(2);
-    let mut conn = connected_run(&rigid, qca, tca, inv_d02_max);
-    let see = |a: &Alignment, conn: &mut (f64, usize)| {
-        let c = connected_run(a, qca, tca, inv_d02_max);
-        if c.0 > conn.0 {
-            *conn = c;
+    let conn_penalty = p.hinge_penalty * lmax as f64;
+    let see = |a: &Alignment, conn: &mut ConnRun| {
+        let (raw, segs) = connected_run(a, qca, tca, inv_d02_max);
+        let score = raw - conn_penalty * segs.len().saturating_sub(1) as f64;
+        if segs.is_empty() || score <= conn.score {
+            return;
         }
+        *conn = ConnRun {
+            raw,
+            score,
+            aln: a.clone(),
+            segs,
+        };
     };
+    let mut conn = ConnRun::default();
+    see(&rigid, &mut conn);
     if tree.nodes.len() <= 1 || placements.is_empty() {
         return (rigid.clone(), rigid, conn);
     }
@@ -1259,14 +1285,14 @@ pub fn align_pair(a: &Prepared, b: &Prepared, p: &AlignParams, work: &mut DpWork
         len1: a.len(),
         len2: b.len(),
         lnorm,
-        conn_raw: c1.0,
-        conn_n: c1.1,
+        conn: c1,
+        conn_reversed: false,
     };
     if p.both_directions {
         let (f2, r2, c2) = align_directional(b, a, lnorm, p, work);
-        if c2.0 > res.conn_raw {
-            res.conn_raw = c2.0;
-            res.conn_n = c2.1;
+        if c2.score > res.conn.score {
+            res.conn = c2;
+            res.conn_reversed = true;
         }
         if f2.raw > res.flex.raw {
             res.flex = f2;
