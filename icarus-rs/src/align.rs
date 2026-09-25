@@ -1048,7 +1048,7 @@ fn align_directional(
     ));
 
     // rigid solution: best whole-chain placement
-    let rigid = match node_placements[0].first() {
+    let mut rigid = match node_placements[0].first() {
         Some(&k) => {
             let pl = &placements[k];
             finalize(
@@ -1085,6 +1085,14 @@ fn align_directional(
     };
     let mut conn = ConnRun::default();
     see(&rigid, &mut conn);
+    // a one-body solution of the assembly is also a rigid superposition of the
+    // whole chain (attach_gaps extends the body), found from a PU placement
+    // that the whole-chain search may have missed
+    let one_body = |a: &Alignment, rigid: &mut Alignment| {
+        if a.segs.len() == 1 && a.segs[0].qs == 0 && a.segs[0].qe == m - 1 && a.raw > rigid.raw {
+            *rigid = a.clone();
+        }
+    };
     if tree.nodes.len() <= 1 || placements.is_empty() {
         return (rigid.clone(), rigid, conn);
     }
@@ -1134,6 +1142,7 @@ fn align_directional(
         // one chimera pass to rank the candidate solutions
         let aln = chimera_align(&ctx, &segs, &keys, work);
         see(&aln, &mut conn);
+        one_body(&aln, &mut rigid);
         finals.push(aln);
     }
     let obj = |a: &Alignment| a.raw - penalty * (a.segs.len().max(1) - 1) as f64;
@@ -1145,6 +1154,7 @@ fn align_directional(
             let keys = segment_keys_from(&ctx, &a.segs, &a);
             let f = finalize(&ctx, a.segs.clone(), keys, work);
             see(&f, &mut conn);
+            one_body(&f, &mut rigid);
             if f.raw >= a.raw {
                 f
             } else {
@@ -1208,6 +1218,7 @@ fn align_directional(
     }
     let flex = best_flex.unwrap();
     see(&flex, &mut conn);
+    one_body(&flex, &mut rigid);
     if obj(&flex) >= rigid.raw {
         (flex, rigid, conn)
     } else {
