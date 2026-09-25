@@ -111,6 +111,17 @@ pub fn segments_string(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> 
 pub const TSV_HEADER: &str =
     "query\ttarget\tlen_q\tlen_t\ttm_flex\ttm_flex_q\ttm_flex_t\ttm_rigid\ttm_rigid_max\ttm_conn\tn_conn\tn_bodies\tn_aligned\tn_core\trmsd_core\tseq_id\tpeeled\tbodies";
 
+/// Rigid TM-score normalised by the longer chain (the homology score).
+pub fn tm_rigid_max(r: &PairResult, a: &Prepared, b: &Prepared) -> f64 {
+    let (rmv, rfx) = if r.rigid_reversed { (b, a) } else { (a, b) };
+    let rst = stats(&r.rigid, rmv, rfx, r.lnorm);
+    if rmv.len() >= rfx.len() {
+        rst.tm_q
+    } else {
+        rst.tm_t
+    }
+}
+
 pub fn tsv_line(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
     let (mv, fx) = if r.reversed { (b, a) } else { (a, b) };
     let st = stats(&r.flex, mv, fx, r.lnorm);
@@ -119,14 +130,7 @@ pub fn tsv_line(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
     } else {
         (st.tm_q, st.tm_t)
     };
-    // rigid TM-score normalised by the longer chain
-    let (rmv, rfx) = if r.rigid_reversed { (b, a) } else { (a, b) };
-    let rst = stats(&r.rigid, rmv, rfx, r.lnorm);
-    let rigid_max = if rmv.len() >= rfx.len() {
-        rst.tm_q
-    } else {
-        rst.tm_t
-    };
+    let rigid_max = tm_rigid_max(r, a, b);
     format!(
         "{}\t{}\t{}\t{}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}\t{}\t{}\t{}\t{:.2}\t{:.3}\t{}\t{}",
         a.s.name,

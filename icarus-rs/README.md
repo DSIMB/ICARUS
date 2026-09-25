@@ -35,7 +35,7 @@ icarus pairs pairs.tsv --dir structures/ --ext .pdb -o results.tsv -t 16
 # proteome scale: preprocess once, then align candidate pairs
 icarus createdb AFDB_proteome_dir/ proteome.icdb --min-plddt 70
 foldseek easy-search AFDB_proteome_dir/ AFDB_proteome_dir/ hits.m8 tmp --exhaustive-search 0
-icarus search proteome.icdb proteome.icdb --pairs hits.m8 -o flexible.tsv --min-tm 0.3
+icarus search proteome.icdb proteome.icdb --pairs hits.m8 -o flexible.tsv --min-rigid 0.3
 ```
 
 Main options: `--max-bodies` (maximum number of rigid bodies, default 6),
@@ -59,15 +59,17 @@ Main options: `--max-bodies` (maximum number of rigid bodies, default 6),
 | `bodies` | `qstart-qend:tstart-tend` per body, in target order (author numbering) |
 | `transforms` | (`search --transforms`) per-body rotation + translation |
 
-**Which score for what.** `tm_flex` measures how well two structures can be
-superposed when their PUs move independently; it is the right score to
-compare alignments of related proteins (the ICARUS benchmarks), but with up to
-six free bodies it is inflated for unrelated proteins (small PUs always find
-some place to fit). For database searches and homology decisions use
-`tm_conn`: it only credits runs of sequence-consecutive bodies whose junctions
-stay chain-connected in the rigid partner — true for hinge motions and circular
-permutations, false for bodies scattered over an unrelated fold — and is
-normalised by the longer chain. It is never lower than `tm_rigid_max`.
+**Which score for what.** `tm_flex` measures how well two structures
+superpose when their PUs move independently: it is the score to compare
+alignments of related proteins (the ICARUS benchmarks). It is *not* a homology
+statistic: with up to six free bodies, small PUs of unrelated proteins always
+find somewhere to fit (on SCOP40 decoy pairs from different folds the median
+`tm_flex` is 0.67). For database searches and homology decisions use
+`tm_rigid_max` (and the prefilter E-value): on the SCOP40 benchmark below it
+ranks homologues as well as Foldseek. `tm_conn` — the flexible score restricted
+to runs of consecutive bodies whose junctions remain chain-connected — and the
+gap `tm_conn - tm_rigid_max` flag homologues related by hinge motions or
+rearrangements; they do not improve homology detection.
 
 ## Algorithm
 

@@ -3,7 +3,7 @@
 # (e.g. an AlphaFold DB proteome): Foldseek prefilter, then ICARUS 2 flexible
 # alignment of every candidate pair.
 #
-# usage: proteome_flexdb.sh STRUCT_DIR OUT_DIR [threads] [min_plddt] [min_tm]
+# usage: proteome_flexdb.sh STRUCT_DIR OUT_DIR [threads] [min_plddt] [min_rigid_tm]
 # env:   ICARUS (default: icarus), FOLDSEEK (default: foldseek),
 #        FOLDSEEK_ARGS (extra search arguments, default: -e 10 --max-seqs 1000)
 set -euo pipefail
@@ -11,7 +11,7 @@ IN=$1
 OUT=$2
 THREADS=${3:-0}
 PLDDT=${4:-70}
-MINTM=${5:-0.3}
+MINTM=${5:-0.0}
 ICARUS=${ICARUS:-icarus}
 FOLDSEEK=${FOLDSEEK:-foldseek}
 FOLDSEEK_ARGS=${FOLDSEEK_ARGS:--e 10 --max-seqs 1000}
@@ -33,10 +33,10 @@ if ls "$IN" | grep -q 'cif.gz$' && ls "$IN" | grep -q 'pdb.gz$'; then INCLUDE='c
 "$FOLDSEEK" search "$OUT/fsdb" "$OUT/fsdb" "$OUT/fsaln" "$OUT/fstmp" --threads "$FS_THREADS" \
     $FOLDSEEK_ARGS -v 1 2> "$OUT/foldseek_search.log"
 "$FOLDSEEK" convertalis "$OUT/fsdb" "$OUT/fsdb" "$OUT/fsaln" "$OUT/candidates.m8" \
-    --format-output query,target,evalue,bits,alntmscore --threads "$FS_THREADS" -v 1
+    --format-output query,target,evalue,bits --threads "$FS_THREADS" -v 1
 log "   $(wc -l < "$OUT/candidates.m8") candidate hits"
 
-log "3/3 flexible alignment of candidate pairs (reporting TM >= $MINTM)"
+log "3/3 flexible alignment of candidate pairs (reporting rigid TM >= $MINTM)"
 "$ICARUS" search "$OUT/structures.icdb" "$OUT/structures.icdb" --pairs "$OUT/candidates.m8" \
-    --min-tm "$MINTM" -t "$THREADS" -o "$OUT/flexible_alignments.tsv" 2> >(tee "$OUT/search.log" >&2)
+    --min-rigid "$MINTM" -t "$THREADS" --transforms -o "$OUT/flexible_alignments.tsv" 2> >(tee "$OUT/search.log" >&2)
 log "done: $OUT/flexible_alignments.tsv"

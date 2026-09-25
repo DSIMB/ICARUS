@@ -58,6 +58,10 @@ struct AlignOpts {
     /// Skip the refit stage (re-placing rigid bodies on the free target)
     #[arg(long)]
     no_refit: bool,
+    /// Faster preset for large-scale runs: peel one structure only, 800 seeds,
+    /// 2 candidate placements per PU (~2.5x faster, ~0.02 lower TM on RIPC)
+    #[arg(long)]
+    fast: bool,
     /// Drop residues whose C-alpha B-factor (pLDDT for AlphaFold models) is
     /// below this value before any processing
     #[arg(long)]
@@ -75,10 +79,18 @@ impl AlignOpts {
                 max_segments: self.max_bodies.max(1),
                 hinge_penalty: self.hinge_penalty,
                 q_stride: self.seed_stride.max(1),
-                max_seeds: self.max_seeds.max(1),
-                per_node: self.per_pu.max(1),
+                max_seeds: if self.fast {
+                    self.max_seeds.min(800)
+                } else {
+                    self.max_seeds.max(1)
+                },
+                per_node: if self.fast {
+                    self.per_pu.min(2)
+                } else {
+                    self.per_pu.max(1)
+                },
                 frag_tol: self.frag_tol,
-                both_directions: !self.one_direction,
+                both_directions: !(self.one_direction || self.fast),
                 refit: !self.no_refit,
             },
         )
@@ -171,6 +183,10 @@ enum Cmd {
         /// normalised by the longer chain) >= this value
         #[arg(long, default_value_t = 0.0)]
         min_conn: f64,
+        /// Only report pairs with a rigid TM-score normalised by the longer
+        /// chain (tm_rigid_max, the homology score) >= this value
+        #[arg(long, default_value_t = 0.0)]
+        min_rigid: f64,
         /// Add a column with the superposition of every rigid body
         #[arg(long)]
         transforms: bool,
@@ -354,6 +370,7 @@ fn main() -> Result<()> {
             output: out,
             min_tm,
             min_conn,
+            min_rigid,
             transforms,
             threads,
             opts,
@@ -438,7 +455,10 @@ fn main() -> Result<()> {
                         let (a, b) = (&qs[i], &tset[j]);
                         let ts = Instant::now();
                         let r = align_pair(a, b, &ap, work);
-                        if r.tm_flex() < min_tm || r.tm_conn() < min_conn {
+                        if r.tm_flex() < min_tm
+                            || r.tm_conn() < min_conn
+                            || (min_rigid > 0.0 && output::tm_rigid_max(&r, a, b) < min_rigid)
+                        {
                             return None;
                         }
                         Some(format!(
