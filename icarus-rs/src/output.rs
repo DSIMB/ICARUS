@@ -24,67 +24,11 @@ pub struct Stats {
     pub n_conn: usize,
 }
 
-/// Junction test between consecutive bodies: the last well-aligned residue of
-/// the first body and the first of the next one (sequence separation `sep`)
-/// must map to target positions compatible with a connected chain.
-fn junction_ok(d: f64, sep: usize) -> bool {
-    d <= (6.0 + 1.5 * (sep.max(1) - 1) as f64).min(25.0)
-}
-
 /// Raw kernel sum (d0 of the longer chain) of the best run of connected,
 /// sequence-consecutive bodies, and the run length.
 fn connected_run(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> (f64, usize) {
     let lmax = moving.len().max(fixed.len());
-    let inv = 1.0 / tm::d0(lmax).powi(2);
-    let nb = aln.segs.len();
-    let mut raw = vec![0.0; nb];
-    // first / last well superposed residue of each body: (query index, target index)
-    let mut first: Vec<Option<(u32, u32)>> = vec![None; nb];
-    let mut last: Vec<Option<(u32, u32)>> = vec![None; nb];
-    for (k, &(i, j)) in aln.pairs.iter().enumerate() {
-        let b = aln.pair_seg[k] as usize;
-        let d = dist(
-            &aln.segs[b].tr.apply(&moving.s.ca[i as usize]),
-            &fixed.s.ca[j as usize],
-        );
-        raw[b] += tm::kernel(d * d, inv);
-        if d <= 5.0 {
-            if first[b].is_none_or(|(fi, _)| i < fi) {
-                first[b] = Some((i, j));
-            }
-            if last[b].is_none_or(|(li, _)| i > li) {
-                last[b] = Some((i, j));
-            }
-        }
-    }
-    let mut by_start: Vec<usize> = (0..nb).collect();
-    by_start.sort_by_key(|&b| aln.segs[b].qs);
-    let (mut best, mut best_n) = (0.0f64, 0usize);
-    let (mut cur, mut cur_n) = (0.0f64, 0usize);
-    for (k, &b) in by_start.iter().enumerate() {
-        let connected = k > 0 && {
-            let a = by_start[k - 1];
-            match (last[a], first[b]) {
-                (Some((ai, aj)), Some((bi, bj))) if bi > ai => {
-                    let d = dist(&fixed.s.ca[aj as usize], &fixed.s.ca[bj as usize]);
-                    junction_ok(d, (bi - ai) as usize)
-                }
-                _ => false,
-            }
-        };
-        if connected {
-            cur += raw[b];
-            cur_n += 1;
-        } else {
-            cur = raw[b];
-            cur_n = 1;
-        }
-        if cur > best {
-            best = cur;
-            best_n = cur_n;
-        }
-    }
-    (best, best_n)
+    crate::align::connected_run(aln, &moving.s.ca, &fixed.s.ca, 1.0 / tm::d0(lmax).powi(2))
 }
 
 /// `moving` is the segmented protein of the alignment, `fixed` the other one.
@@ -194,8 +138,8 @@ pub fn tsv_line(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
         tm_t,
         r.tm_rigid(),
         rigid_max,
-        st.tm_conn.max(rigid_max),
-        st.n_conn,
+        r.tm_conn().max(rigid_max),
+        r.conn_n,
         r.flex.segs.len(),
         st.n_aligned,
         st.n_core,

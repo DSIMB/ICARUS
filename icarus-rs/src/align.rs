@@ -99,9 +99,18 @@ pub struct PairResult {
     pub len1: usize,
     pub len2: usize,
     pub lnorm: usize,
+    /// Best connected-run score over all candidate solutions (raw kernel sum
+    /// with d0 of the longer chain) and its number of bodies.
+    pub conn_raw: f64,
+    pub conn_n: usize,
 }
 
 impl PairResult {
+    /// Connectivity-aware flexible TM-score, normalised by the longer chain
+    /// (a detection score: never below the rigid TM-score of the longer chain).
+    pub fn tm_conn(&self) -> f64 {
+        self.conn_raw / self.len1.max(self.len2) as f64
+    }
     pub fn tm_flex(&self) -> f64 {
         self.flex.raw / self.lnorm as f64
     }
@@ -688,6 +697,66 @@ fn refine_hinges(ctx: &Ctx, aln: Alignment, work: &mut DpWork) -> Alignment {
     }
 }
 
+/// Junction test between consecutive bodies: the last well-aligned residue of
+/// the first body and the first of the next one (sequence separation `sep`)
+/// must map to target positions compatible with a connected chain.
+fn junction_ok(d: f64, sep: usize) -> bool {
+    d <= (6.0 + 1.5 * (sep.max(1) - 1) as f64).min(25.0)
+}
+
+/// Raw kernel sum (with `inv_d02`) of the best run of sequence-consecutive
+/// bodies whose junctions preserve chain connectivity, and its length.
+/// Genuine flexibility (hinges, and also circular permutations, whose new
+/// termini are spatially adjacent) keeps chains connected, whereas bodies
+/// scattered over unrelated structures do not.
+pub fn connected_run(aln: &Alignment, q: &[V3], t: &[V3], inv_d02: f64) -> (f64, usize) {
+    let nb = aln.segs.len();
+    let mut raw = vec![0.0; nb];
+    let mut first: Vec<Option<(u32, u32)>> = vec![None; nb];
+    let mut last: Vec<Option<(u32, u32)>> = vec![None; nb];
+    for (k, &(i, j)) in aln.pairs.iter().enumerate() {
+        let b = aln.pair_seg[k] as usize;
+        let d2 = dist2(&aln.segs[b].tr.apply(&q[i as usize]), &t[j as usize]);
+        raw[b] += tm::kernel(d2, inv_d02);
+        if d2 <= 25.0 {
+            if first[b].is_none_or(|(fi, _)| i < fi) {
+                first[b] = Some((i, j));
+            }
+            if last[b].is_none_or(|(li, _)| i > li) {
+                last[b] = Some((i, j));
+            }
+        }
+    }
+    let mut by_start: Vec<usize> = (0..nb).collect();
+    by_start.sort_by_key(|&b| aln.segs[b].qs);
+    let (mut best, mut best_n) = (0.0f64, 0usize);
+    let (mut cur, mut cur_n) = (0.0f64, 0usize);
+    for (k, &b) in by_start.iter().enumerate() {
+        let connected = k > 0 && {
+            let a = by_start[k - 1];
+            match (last[a], first[b]) {
+                (Some((ai, aj)), Some((bi, bj))) if bi > ai => {
+                    let d = dist2(&t[aj as usize], &t[bj as usize]).sqrt();
+                    junction_ok(d, (bi - ai) as usize)
+                }
+                _ => false,
+            }
+        };
+        if connected {
+            cur += raw[b];
+            cur_n += 1;
+        } else {
+            cur = raw[b];
+            cur_n = 1;
+        }
+        if cur > best {
+            best = cur;
+            best_n = cur_n;
+        }
+    }
+    (best, best_n)
+}
+
 /// Median target position of the well-superposed pairs of each segment
 /// (segments without pairs keep their rank in the current order).
 fn segment_keys_from(ctx: &Ctx, segs: &[Segment], aln: &Alignment) -> Vec<f64> {
@@ -810,7 +879,7 @@ fn align_directional(
     lnorm: usize,
     p: &AlignParams,
     work: &mut DpWork,
-) -> (Alignment, Alignment) {
+) -> (Alignment, Alignment, (f64, usize)) {
     let prof = std::env::var_os("ICARUS_PROFILE").is_some();
     let clock = std::time::Instant::now();
     let lap = |name: &str| {
@@ -979,8 +1048,18 @@ fn align_directional(
         None => Alignment::default(),
     };
     lap("rigid finalize");
+    // connectivity-aware score, maximised over every solution examined
+    let lmax = q.len().max(t.len());
+    let inv_d02_max = 1.0 / tm::d0(lmax).powi(2);
+    let mut conn = connected_run(&rigid, qca, tca, inv_d02_max);
+    let see = |a: &Alignment, conn: &mut (f64, usize)| {
+        let c = connected_run(a, qca, tca, inv_d02_max);
+        if c.0 > conn.0 {
+            *conn = c;
+        }
+    };
     if tree.nodes.len() <= 1 || placements.is_empty() {
-        return (rigid.clone(), rigid);
+        return (rigid.clone(), rigid, conn);
     }
 
     // 4. assemble rigid bodies
@@ -1000,7 +1079,7 @@ fn align_directional(
         tree.leaves.len()
     ));
     if solutions.is_empty() {
-        return (rigid.clone(), rigid);
+        return (rigid.clone(), rigid, conn);
     }
     // finalise the best selection of every body count, keep the best two
     let mut finals: Vec<Alignment> = Vec::new();
@@ -1026,7 +1105,9 @@ fn align_directional(
         let keys: Vec<f64> = segs.iter().map(|(_, k)| *k).collect();
         let segs: Vec<Segment> = segs.into_iter().map(|(s, _)| s).collect();
         // one chimera pass to rank the candidate solutions
-        finals.push(chimera_align(&ctx, &segs, &keys, work));
+        let aln = chimera_align(&ctx, &segs, &keys, work);
+        see(&aln, &mut conn);
+        finals.push(aln);
     }
     let obj = |a: &Alignment| a.raw - penalty * (a.segs.len().max(1) - 1) as f64;
     finals.sort_by(|a, b| cmp_desc(obj(a), obj(b)));
@@ -1036,6 +1117,7 @@ fn align_directional(
         .map(|a| {
             let keys = segment_keys_from(&ctx, &a.segs, &a);
             let f = finalize(&ctx, a.segs.clone(), keys, work);
+            see(&f, &mut conn);
             if f.raw >= a.raw {
                 f
             } else {
@@ -1098,10 +1180,11 @@ fn align_directional(
         }
     }
     let flex = best_flex.unwrap();
+    see(&flex, &mut conn);
     if obj(&flex) >= rigid.raw {
-        (flex, rigid)
+        (flex, rigid, conn)
     } else {
-        (rigid.clone(), rigid)
+        (rigid.clone(), rigid, conn)
     }
 }
 
@@ -1166,7 +1249,7 @@ fn attach_gaps(ctx: &Ctx, segs: &mut [(Segment, f64)], m: usize) {
 /// Align two prepared structures (ICARUS flexible alignment).
 pub fn align_pair(a: &Prepared, b: &Prepared, p: &AlignParams, work: &mut DpWork) -> PairResult {
     let lnorm = a.len().min(b.len());
-    let (f1, r1) = align_directional(a, b, lnorm, p, work);
+    let (f1, r1, c1) = align_directional(a, b, lnorm, p, work);
     let mut res = PairResult {
         flex: f1,
         rigid: r1,
@@ -1175,9 +1258,15 @@ pub fn align_pair(a: &Prepared, b: &Prepared, p: &AlignParams, work: &mut DpWork
         len1: a.len(),
         len2: b.len(),
         lnorm,
+        conn_raw: c1.0,
+        conn_n: c1.1,
     };
     if p.both_directions {
-        let (f2, r2) = align_directional(b, a, lnorm, p, work);
+        let (f2, r2, c2) = align_directional(b, a, lnorm, p, work);
+        if c2.0 > res.conn_raw {
+            res.conn_raw = c2.0;
+            res.conn_n = c2.1;
+        }
         if f2.raw > res.flex.raw {
             res.flex = f2;
             res.reversed = true;
