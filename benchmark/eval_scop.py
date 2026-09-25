@@ -48,6 +48,10 @@ def load_scores(spec):
                 v = float(p[ci])
                 if v > scores.get((q, t), float("-inf")):
                     scores[(q, t)] = v
+    # symmetric scores (e.g. all-vs-all within one database) may be stored in
+    # either orientation
+    for (q, t), v in list(scores.items()):
+        scores.setdefault((t, q), v)
     return name, scores
 
 

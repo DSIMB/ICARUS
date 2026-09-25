@@ -183,9 +183,10 @@ def main():
             mv, fx, second, dt = run_kpax(q, t, spath(q), spath(t), work, a.method == "kpax_flex")
             if os.path.exists(mv):
                 results[(q, t)] = (mv, fx, second, dt, "")
-    elif a.method in ("foldseek_tm", "foldseek_3di"):
+    elif a.method in ("foldseek_tm", "foldseek_3di", "foldseek_lol"):
+        mode = {"foldseek_tm": 1, "foldseek_3di": 2, "foldseek_lol": 3}[a.method]
         for q, t in pairs:
-            r = run_foldseek(a.exe, q, t, spath(q), spath(t), work, 1 if a.method == "foldseek_tm" else 2)
+            r = run_foldseek(a.exe, q, t, spath(q), spath(t), work, mode)
             if r:
                 results[(q, t)] = r + ("",)
     elif a.method in ("fatcat_flex", "fatcat_rigid"):

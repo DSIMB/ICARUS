@@ -74,9 +74,23 @@ impl DistGrid {
         }
         let dist = d2best
             .iter()
-            .map(|&d2| if d2 == f32::MAX { FAR } else { ((d2.sqrt() * 10.0).round() as u32).min(254) as u8 })
+            .map(|&d2| {
+                if d2 == f32::MAX {
+                    FAR
+                } else {
+                    ((d2.sqrt() * 10.0).round() as u32).min(254) as u8
+                }
+            })
             .collect();
-        Self { origin, inv_h: 1.0 / h, nx, ny, nz, dist, nearest }
+        Self {
+            origin,
+            inv_h: 1.0 / h,
+            nx,
+            ny,
+            nz,
+            dist,
+            nearest,
+        }
     }
 
     /// Nearest target residue to point `x`: (quantised distance in 0.1 Å, index).
@@ -133,13 +147,19 @@ mod tests {
 
     #[test]
     fn grid_lookup_is_close_to_brute_force() {
-        let ca: Vec<V3> = (0..50).map(|i| {
-            let t = i as f64 * 0.5;
-            [10.0 * t.cos(), 10.0 * t.sin(), 1.5 * i as f64]
-        }).collect();
+        let ca: Vec<V3> = (0..50)
+            .map(|i| {
+                let t = i as f64 * 0.5;
+                [10.0 * t.cos(), 10.0 * t.sin(), 1.5 * i as f64]
+            })
+            .collect();
         let g = DistGrid::build(&ca, 1.0, 8.0);
         for k in 0..200 {
-            let x = [((k * 37) % 23) as f64 - 11.0, ((k * 53) % 21) as f64 - 10.0, (k % 70) as f64];
+            let x = [
+                ((k * 37) % 23) as f64 - 11.0,
+                ((k * 53) % 21) as f64 - 10.0,
+                (k % 70) as f64,
+            ];
             let (d, _) = brute_nearest(&ca, &x);
             let (q, _) = g.lookup(&x);
             if d < 7.0 {

@@ -35,7 +35,12 @@ fn drms2(a: &[f32; FRAG_D], b: &[f32; FRAG_D]) -> f32 {
 }
 
 /// Find gapless blocks of similar local structure between query and target.
-pub fn find_blocks(qf: &[[f32; FRAG_D]], tf: &[[f32; FRAG_D]], q_stride: usize, tol: f32) -> Vec<Block> {
+pub fn find_blocks(
+    qf: &[[f32; FRAG_D]],
+    tf: &[[f32; FRAG_D]],
+    q_stride: usize,
+    tol: f32,
+) -> Vec<Block> {
     let tol2 = tol * tol;
     let quick_tol = 3.0 * tol;
     let mut afps: Vec<(i32, u32)> = Vec::new(); // (diagonal j - i, i)
@@ -63,7 +68,11 @@ pub fn find_blocks(qf: &[[f32; FRAG_D]], tf: &[[f32; FRAG_D]], q_stride: usize, 
             k2 += 1;
         }
         let len = last - i0 + FRAG as u32;
-        blocks.push(Block { qi: i0, tj: (i0 as i32 + diag) as u32, len });
+        blocks.push(Block {
+            qi: i0,
+            tj: (i0 as i32 + diag) as u32,
+            len,
+        });
         k = k2;
     }
     blocks
@@ -105,7 +114,8 @@ mod tests {
     #[test]
     fn quick_indices_are_long_range_pairs() {
         // packed index of pair (a,b), a<b, in an 8-residue fragment
-        let idx = |a: usize, b: usize| (0..a).map(|k| super::FRAG - 1 - k).sum::<usize>() + (b - a - 1);
+        let idx =
+            |a: usize, b: usize| (0..a).map(|k| super::FRAG - 1 - k).sum::<usize>() + (b - a - 1);
         assert_eq!(super::QUICK, [idx(0, 7), idx(0, 4), idx(3, 7), idx(2, 6)]);
         assert_eq!(idx(6, 7), super::FRAG_D - 1);
     }

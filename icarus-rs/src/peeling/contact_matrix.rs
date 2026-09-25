@@ -47,11 +47,6 @@ impl ContactMatrix {
         Self { n, cum }
     }
 
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.n
-    }
-
     /// Contact probability between residues i and j (0-indexed).
     #[inline]
     pub fn get(&self, i: usize, j: usize) -> f64 {
@@ -60,10 +55,17 @@ impl ContactMatrix {
 
     /// Sum of contact probabilities over [row_start..=row_end, col_start..=col_end].
     #[inline]
-    pub fn rectangle_sum(&self, row_start: usize, col_start: usize, row_end: usize, col_end: usize) -> f64 {
+    pub fn rectangle_sum(
+        &self,
+        row_start: usize,
+        col_start: usize,
+        row_end: usize,
+        col_end: usize,
+    ) -> f64 {
         let (r1, c1, r2, c2) = (row_start, col_start, row_end + 1, col_end + 1);
         let cn = self.n + 1;
-        self.cum[r2 * cn + c2] - self.cum[r1 * cn + c2] - self.cum[r2 * cn + c1] + self.cum[r1 * cn + c1]
+        self.cum[r2 * cn + c2] - self.cum[r1 * cn + c2] - self.cum[r2 * cn + c1]
+            + self.cum[r1 * cn + c1]
     }
 }
 
@@ -73,10 +75,16 @@ mod tests {
 
     #[test]
     fn rectangle_sums_match_brute_force() {
-        let coords = vec![[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [5.0, 5.0, 0.0]];
+        let coords = vec![
+            [0.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [0.0, 5.0, 0.0],
+            [5.0, 5.0, 0.0],
+        ];
         let mat = ContactMatrix::from_ca_coords(&coords, 6.0, 1.5);
         let p = |i: usize, j: usize| {
-            let d = ((coords[i][0] - coords[j][0]).powi(2) + (coords[i][1] - coords[j][1]).powi(2)).sqrt();
+            let d = ((coords[i][0] - coords[j][0]).powi(2) + (coords[i][1] - coords[j][1]).powi(2))
+                .sqrt();
             1.0 / (1.0 + ((d - 6.0) / 1.5f64).exp())
         };
         assert!((mat.get(1, 2) - p(1, 2)).abs() < 1e-12);

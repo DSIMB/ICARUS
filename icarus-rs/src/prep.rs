@@ -29,6 +29,10 @@ impl PuNode {
     pub fn len(&self) -> usize {
         self.end - self.start + 1
     }
+
+    pub fn is_empty(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -43,8 +47,19 @@ pub struct PuTree {
 impl PuTree {
     /// Build the hierarchy from Peeling iterations, keeping iterations with at
     /// most `max_leaves` PUs. Every iteration splits exactly one PU.
-    pub fn from_iterations(n: usize, iterations: &[crate::peeling::Iteration], max_leaves: usize) -> Self {
-        let mut nodes = vec![PuNode { start: 0, end: n - 1, depth: 0, parent: None, children: vec![], leaf_mask: 0 }];
+    pub fn from_iterations(
+        n: usize,
+        iterations: &[crate::peeling::Iteration],
+        max_leaves: usize,
+    ) -> Self {
+        let mut nodes = vec![PuNode {
+            start: 0,
+            end: n - 1,
+            depth: 0,
+            parent: None,
+            children: vec![],
+            leaf_mask: 0,
+        }];
         let mut levels = vec![vec![0usize]];
         let mut current: Vec<usize> = vec![0];
         for (k, it) in iterations.iter().enumerate() {
@@ -53,13 +68,26 @@ impl PuTree {
             }
             let mut next = Vec::with_capacity(it.pus.len());
             for &[s, e] in &it.pus {
-                if let Some(&id) = current.iter().find(|&&id| nodes[id].start == s && nodes[id].end == e) {
+                if let Some(&id) = current
+                    .iter()
+                    .find(|&&id| nodes[id].start == s && nodes[id].end == e)
+                {
                     next.push(id);
                     continue;
                 }
-                let parent = current.iter().copied().find(|&id| nodes[id].start <= s && e <= nodes[id].end);
+                let parent = current
+                    .iter()
+                    .copied()
+                    .find(|&id| nodes[id].start <= s && e <= nodes[id].end);
                 let id = nodes.len();
-                nodes.push(PuNode { start: s, end: e, depth: k + 1, parent, children: vec![], leaf_mask: 0 });
+                nodes.push(PuNode {
+                    start: s,
+                    end: e,
+                    depth: k + 1,
+                    parent,
+                    children: vec![],
+                    leaf_mask: 0,
+                });
                 if let Some(p) = parent {
                     nodes[p].children.push(id);
                 }
@@ -78,7 +106,11 @@ impl PuTree {
                 }
             }
         }
-        Self { nodes, leaves, levels }
+        Self {
+            nodes,
+            leaves,
+            levels,
+        }
     }
 }
 
@@ -91,7 +123,10 @@ pub struct PrepParams {
 
 impl Default for PrepParams {
     fn default() -> Self {
-        Self { min_pu_size: 15, max_leaves: 10 }
+        Self {
+            min_pu_size: 15,
+            max_leaves: 10,
+        }
     }
 }
 
@@ -138,7 +173,13 @@ fn ca_secondary_structure(ca: &[V3]) -> Vec<char> {
             && (d13 - 6.1).abs() < 1.42
             && (d24 - 6.1).abs() < 1.42
             && (d35 - 6.1).abs() < 1.42;
-        ss[i] = if helix { 'H' } else if strand { 'E' } else { ' ' };
+        ss[i] = if helix {
+            'H'
+        } else if strand {
+            'E'
+        } else {
+            ' '
+        };
     }
     ss
 }
@@ -164,8 +205,18 @@ pub fn fragment_signatures(ca: &[V3]) -> Vec<[f32; FRAG_D]> {
 
 pub fn prepare(s: Structure, params: &PrepParams) -> Prepared {
     let n = s.len();
-    let has_backbone = s.backbone.iter().filter(|b| b.n.is_some() && b.c.is_some() && b.o.is_some()).count() * 2 > n;
-    let ss = if has_backbone { dssp::assign(&s.backbone, &s.seq) } else { ca_secondary_structure(&s.ca) };
+    let has_backbone = s
+        .backbone
+        .iter()
+        .filter(|b| b.n.is_some() && b.c.is_some() && b.o.is_some())
+        .count()
+        * 2
+        > n;
+    let ss = if has_backbone {
+        dssp::assign(&s.backbone, &s.seq)
+    } else {
+        ca_secondary_structure(&s.ca)
+    };
     let ss_types: Vec<SsType> = ss.iter().map(|&c| SsType::from_dssp_char(c)).collect();
     let cfg = PeelingConfig {
         min_pu_size: params.min_pu_size,
@@ -173,7 +224,11 @@ pub fn prepare(s: Structure, params: &PrepParams) -> Prepared {
         max_pu_number: params.max_leaves + 2,
         ..PeelingConfig::default()
     };
-    let iterations = if n >= 2 * params.min_pu_size { run_peeling(&s.ca, &ss_types, &cfg) } else { Vec::new() };
+    let iterations = if n >= 2 * params.min_pu_size {
+        run_peeling(&s.ca, &ss_types, &cfg)
+    } else {
+        Vec::new()
+    };
     let tree = PuTree::from_iterations(n, &iterations, params.max_leaves);
     let frags = fragment_signatures(&s.ca);
     Prepared { s, ss, tree, frags }

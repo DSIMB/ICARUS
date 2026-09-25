@@ -17,13 +17,86 @@ pub struct Stats {
     pub n_core: usize,
     pub rmsd_core: f64,
     pub seq_id: f64,
+    /// TM-score (normalised by the longer chain) of the best run of
+    /// sequence-consecutive bodies whose junctions preserve chain connectivity.
+    pub tm_conn: f64,
+    /// Number of bodies in that run.
+    pub n_conn: usize,
+}
+
+/// Junction test between consecutive bodies: the last well-aligned residue of
+/// the first body and the first of the next one (sequence separation `sep`)
+/// must map to target positions compatible with a connected chain.
+fn junction_ok(d: f64, sep: usize) -> bool {
+    d <= (6.0 + 1.5 * (sep.max(1) - 1) as f64).min(25.0)
+}
+
+/// Raw kernel sum (d0 of the longer chain) of the best run of connected,
+/// sequence-consecutive bodies, and the run length.
+fn connected_run(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> (f64, usize) {
+    let lmax = moving.len().max(fixed.len());
+    let inv = 1.0 / tm::d0(lmax).powi(2);
+    let nb = aln.segs.len();
+    let mut raw = vec![0.0; nb];
+    // first / last well superposed residue of each body: (query index, target index)
+    let mut first: Vec<Option<(u32, u32)>> = vec![None; nb];
+    let mut last: Vec<Option<(u32, u32)>> = vec![None; nb];
+    for (k, &(i, j)) in aln.pairs.iter().enumerate() {
+        let b = aln.pair_seg[k] as usize;
+        let d = dist(
+            &aln.segs[b].tr.apply(&moving.s.ca[i as usize]),
+            &fixed.s.ca[j as usize],
+        );
+        raw[b] += tm::kernel(d * d, inv);
+        if d <= 5.0 {
+            if first[b].is_none_or(|(fi, _)| i < fi) {
+                first[b] = Some((i, j));
+            }
+            if last[b].is_none_or(|(li, _)| i > li) {
+                last[b] = Some((i, j));
+            }
+        }
+    }
+    let mut by_start: Vec<usize> = (0..nb).collect();
+    by_start.sort_by_key(|&b| aln.segs[b].qs);
+    let (mut best, mut best_n) = (0.0f64, 0usize);
+    let (mut cur, mut cur_n) = (0.0f64, 0usize);
+    for (k, &b) in by_start.iter().enumerate() {
+        let connected = k > 0 && {
+            let a = by_start[k - 1];
+            match (last[a], first[b]) {
+                (Some((ai, aj)), Some((bi, bj))) if bi > ai => {
+                    let d = dist(&fixed.s.ca[aj as usize], &fixed.s.ca[bj as usize]);
+                    junction_ok(d, (bi - ai) as usize)
+                }
+                _ => false,
+            }
+        };
+        if connected {
+            cur += raw[b];
+            cur_n += 1;
+        } else {
+            cur = raw[b];
+            cur_n = 1;
+        }
+        if cur > best {
+            best = cur;
+            best_n = cur_n;
+        }
+    }
+    (best, best_n)
 }
 
 /// `moving` is the segmented protein of the alignment, `fixed` the other one.
 pub fn stats(aln: &Alignment, moving: &Prepared, fixed: &Prepared, lnorm: usize) -> Stats {
     let (lq, lt) = (moving.len(), fixed.len());
-    let (i0, iq, it) = (1.0 / tm::d0(lnorm).powi(2), 1.0 / tm::d0(lq).powi(2), 1.0 / tm::d0(lt).powi(2));
-    let (mut s0, mut sq, mut st, mut rms, mut ncore, mut ident) = (0.0, 0.0, 0.0, 0.0, 0usize, 0usize);
+    let (i0, iq, it) = (
+        1.0 / tm::d0(lnorm).powi(2),
+        1.0 / tm::d0(lq).powi(2),
+        1.0 / tm::d0(lt).powi(2),
+    );
+    let (mut s0, mut sq, mut st, mut rms, mut ncore, mut ident) =
+        (0.0, 0.0, 0.0, 0.0, 0usize, 0usize);
     for (k, &(i, j)) in aln.pairs.iter().enumerate() {
         let seg = &aln.segs[aln.pair_seg[k] as usize];
         let x = seg.tr.apply(&moving.s.ca[i as usize]);
@@ -40,14 +113,25 @@ pub fn stats(aln: &Alignment, moving: &Prepared, fixed: &Prepared, lnorm: usize)
             }
         }
     }
+    let (conn_raw, n_conn) = connected_run(aln, moving, fixed);
     Stats {
+        tm_conn: conn_raw / lq.max(lt) as f64,
+        n_conn,
         tm_min: s0 / lnorm as f64,
         tm_q: sq / lq as f64,
         tm_t: st / lt as f64,
         n_aligned: aln.pairs.len(),
         n_core: ncore,
-        rmsd_core: if ncore > 0 { (rms / ncore as f64).sqrt() } else { 0.0 },
-        seq_id: if ncore > 0 { ident as f64 / ncore as f64 } else { 0.0 },
+        rmsd_core: if ncore > 0 {
+            (rms / ncore as f64).sqrt()
+        } else {
+            0.0
+        },
+        seq_id: if ncore > 0 {
+            ident as f64 / ncore as f64
+        } else {
+            0.0
+        },
     }
 }
 
@@ -56,7 +140,13 @@ pub fn segments_string(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> 
     let mut out = String::new();
     for &si in &aln.order {
         let sg = &aln.segs[si];
-        let tj: Vec<u32> = aln.pairs.iter().zip(&aln.pair_seg).filter(|(_, &s)| s as usize == si).map(|(p, _)| p.1).collect();
+        let tj: Vec<u32> = aln
+            .pairs
+            .iter()
+            .zip(&aln.pair_seg)
+            .filter(|(_, &s)| s as usize == si)
+            .map(|(p, _)| p.1)
+            .collect();
         if !out.is_empty() {
             out.push(',');
         }
@@ -64,7 +154,10 @@ pub fn segments_string(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> 
         if tj.is_empty() {
             let _ = write!(out, "{a}-{b}:-");
         } else {
-            let (lo, hi) = (*tj.iter().min().unwrap() as usize, *tj.iter().max().unwrap() as usize);
+            let (lo, hi) = (
+                *tj.iter().min().unwrap() as usize,
+                *tj.iter().max().unwrap() as usize,
+            );
             let _ = write!(out, "{a}-{b}:{}-{}", fixed.s.resid[lo], fixed.s.resid[hi]);
         }
     }
@@ -72,14 +165,26 @@ pub fn segments_string(aln: &Alignment, moving: &Prepared, fixed: &Prepared) -> 
 }
 
 pub const TSV_HEADER: &str =
-    "query\ttarget\tlen_q\tlen_t\ttm_flex\ttm_flex_q\ttm_flex_t\ttm_rigid\tn_bodies\tn_aligned\tn_core\trmsd_core\tseq_id\tpeeled\tbodies";
+    "query\ttarget\tlen_q\tlen_t\ttm_flex\ttm_flex_q\ttm_flex_t\ttm_rigid\ttm_rigid_max\ttm_conn\tn_conn\tn_bodies\tn_aligned\tn_core\trmsd_core\tseq_id\tpeeled\tbodies";
 
 pub fn tsv_line(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
     let (mv, fx) = if r.reversed { (b, a) } else { (a, b) };
     let st = stats(&r.flex, mv, fx, r.lnorm);
-    let (tm_q, tm_t) = if r.reversed { (st.tm_t, st.tm_q) } else { (st.tm_q, st.tm_t) };
+    let (tm_q, tm_t) = if r.reversed {
+        (st.tm_t, st.tm_q)
+    } else {
+        (st.tm_q, st.tm_t)
+    };
+    // rigid TM-score normalised by the longer chain
+    let (rmv, rfx) = if r.rigid_reversed { (b, a) } else { (a, b) };
+    let rst = stats(&r.rigid, rmv, rfx, r.lnorm);
+    let rigid_max = if rmv.len() >= rfx.len() {
+        rst.tm_q
+    } else {
+        rst.tm_t
+    };
     format!(
-        "{}\t{}\t{}\t{}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}\t{}\t{}\t{:.2}\t{:.3}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{}\t{}\t{}\t{}\t{:.2}\t{:.3}\t{}\t{}",
         a.s.name,
         b.s.name,
         a.len(),
@@ -88,6 +193,9 @@ pub fn tsv_line(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
         tm_q,
         tm_t,
         r.tm_rigid(),
+        rigid_max,
+        st.tm_conn.max(rigid_max),
+        st.n_conn,
         r.flex.segs.len(),
         st.n_aligned,
         st.n_core,
@@ -98,6 +206,29 @@ pub fn tsv_line(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
     )
 }
 
+/// Per-body superpositions in target order, `;`-separated; each body is
+/// "r11,r12,r13,r21,r22,r23,r31,r32,r33,t1,t2,t3" mapping the peeled
+/// structure onto the rigid one (x' = R x + t).
+pub fn transforms_string(aln: &Alignment) -> String {
+    aln.order
+        .iter()
+        .map(|&si| {
+            let tr = &aln.segs[si].tr;
+            let mut v: Vec<String> = Vec::with_capacity(12);
+            for row in &tr.r {
+                for x in row {
+                    v.push(format!("{x:.5}"));
+                }
+            }
+            for x in &tr.t {
+                v.push(format!("{x:.3}"));
+            }
+            v.join(",")
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 /// Human readable report with the chimera alignment.
 pub fn report(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
     let (mv, fx) = if r.reversed { (b, a) } else { (a, b) };
@@ -106,25 +237,64 @@ pub fn report(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
     let _ = writeln!(s, "ICARUS flexible alignment");
     let _ = writeln!(s, "  Structure 1 : {} ({} residues)", a.s.name, a.len());
     let _ = writeln!(s, "  Structure 2 : {} ({} residues)", b.s.name, b.len());
-    let _ = writeln!(s, "  Peeled (flexible) structure: {}  /  rigid: {}", mv.s.name, fx.s.name);
-    let _ = writeln!(s, "  TM-score (flexible, norm. by shortest = {}) : {:.4}", r.lnorm, st.tm_min);
-    let _ = writeln!(s, "  TM-score (flexible, norm. by {} / {})       : {:.4} / {:.4}", mv.s.name, fx.s.name, st.tm_q, st.tm_t);
-    let _ = writeln!(s, "  TM-score (rigid, norm. by shortest)        : {:.4}", r.tm_rigid());
+    let _ = writeln!(
+        s,
+        "  Peeled (flexible) structure: {}  /  rigid: {}",
+        mv.s.name, fx.s.name
+    );
+    let _ = writeln!(
+        s,
+        "  TM-score (flexible, norm. by shortest = {}) : {:.4}",
+        r.lnorm, st.tm_min
+    );
+    let _ = writeln!(
+        s,
+        "  TM-score (flexible, norm. by {} / {})       : {:.4} / {:.4}",
+        mv.s.name, fx.s.name, st.tm_q, st.tm_t
+    );
+    let _ = writeln!(
+        s,
+        "  TM-score (rigid, norm. by shortest)        : {:.4}",
+        r.tm_rigid()
+    );
     let _ = writeln!(s, "  Rigid bodies: {}   aligned: {}   within 5 A: {}   RMSD(5 A core): {:.2}   seq. id: {:.1}%",
         r.flex.segs.len(), st.n_aligned, st.n_core, st.rmsd_core, 100.0 * st.seq_id);
-    let _ = writeln!(s, "\n  Rigid bodies in target order ({} residues -> {} residues):", mv.s.name, fx.s.name);
+    let _ = writeln!(
+        s,
+        "\n  Rigid bodies in target order ({} residues -> {} residues):",
+        mv.s.name, fx.s.name
+    );
     for (rank, &si) in r.flex.order.iter().enumerate() {
         let sg = &r.flex.segs[si];
-        let tj: Vec<u32> = r.flex.pairs.iter().zip(&r.flex.pair_seg).filter(|(_, &x)| x as usize == si).map(|(p, _)| p.1).collect();
+        let tj: Vec<u32> = r
+            .flex
+            .pairs
+            .iter()
+            .zip(&r.flex.pair_seg)
+            .filter(|(_, &x)| x as usize == si)
+            .map(|(p, _)| p.1)
+            .collect();
         let tr = if tj.is_empty() {
             "-".to_string()
         } else {
-            format!("{}-{}", fx.s.resid[*tj.iter().min().unwrap() as usize], fx.s.resid[*tj.iter().max().unwrap() as usize])
+            format!(
+                "{}-{}",
+                fx.s.resid[*tj.iter().min().unwrap() as usize],
+                fx.s.resid[*tj.iter().max().unwrap() as usize]
+            )
         };
-        let _ = writeln!(s, "    body {:>2}: {:>6}-{:<6} -> {}", rank + 1, mv.s.resid[sg.qs].to_string(), mv.s.resid[sg.qe].to_string(), tr);
+        let _ = writeln!(
+            s,
+            "    body {:>2}: {:>6}-{:<6} -> {}",
+            rank + 1,
+            mv.s.resid[sg.qs].to_string(),
+            mv.s.resid[sg.qe].to_string(),
+            tr
+        );
     }
     // chimera alignment text
-    let (mut l1, mut l2, mut l3, mut lb) = (String::new(), String::new(), String::new(), String::new());
+    let (mut l1, mut l2, mut l3, mut lb) =
+        (String::new(), String::new(), String::new(), String::new());
     let mut pos: std::collections::HashMap<u32, (u32, f64, u16)> = Default::default();
     for (k, &(i, j)) in r.flex.pairs.iter().enumerate() {
         let sg = &r.flex.segs[r.flex.pair_seg[k] as usize];
@@ -145,7 +315,15 @@ pub fn report(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
                     tnext += 1;
                 }
                 l1.push(mv.s.seq[i] as char);
-                l2.push(if d <= 1.0 { '|' } else if d <= 2.0 { ':' } else if d <= 4.0 { '.' } else { ' ' });
+                l2.push(if d <= 1.0 {
+                    '|'
+                } else if d <= 2.0 {
+                    ':'
+                } else if d <= 4.0 {
+                    '.'
+                } else {
+                    ' '
+                });
                 l3.push(fx.s.seq[j as usize] as char);
                 lb.push(tag);
                 tnext = j + 1;
@@ -165,13 +343,36 @@ pub fn report(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
         tnext += 1;
     }
     let _ = writeln!(s, "\n  Alignment (body number, peeled structure, distance class |<=1A :<=2A .<=4A, rigid structure):");
-    let chars: Vec<(char, char, char, char)> =
-        lb.chars().zip(l1.chars()).zip(l2.chars()).zip(l3.chars()).map(|(((a, b), c), d)| (a, b, c, d)).collect();
+    let chars: Vec<(char, char, char, char)> = lb
+        .chars()
+        .zip(l1.chars())
+        .zip(l2.chars())
+        .zip(l3.chars())
+        .map(|(((a, b), c), d)| (a, b, c, d))
+        .collect();
     for chunk in chars.chunks(80) {
-        let _ = writeln!(s, "  body   {}", chunk.iter().map(|c| c.0).collect::<String>());
-        let _ = writeln!(s, "  {:<6} {}", "moved", chunk.iter().map(|c| c.1).collect::<String>());
-        let _ = writeln!(s, "         {}", chunk.iter().map(|c| c.2).collect::<String>());
-        let _ = writeln!(s, "  {:<6} {}\n", "fixed", chunk.iter().map(|c| c.3).collect::<String>());
+        let _ = writeln!(
+            s,
+            "  body   {}",
+            chunk.iter().map(|c| c.0).collect::<String>()
+        );
+        let _ = writeln!(
+            s,
+            "  {:<6} {}",
+            "moved",
+            chunk.iter().map(|c| c.1).collect::<String>()
+        );
+        let _ = writeln!(
+            s,
+            "         {}",
+            chunk.iter().map(|c| c.2).collect::<String>()
+        );
+        let _ = writeln!(
+            s,
+            "  {:<6} {}\n",
+            "fixed",
+            chunk.iter().map(|c| c.3).collect::<String>()
+        );
     }
     s
 }
@@ -179,7 +380,12 @@ pub fn report(r: &PairResult, a: &Prepared, b: &Prepared) -> String {
 /// Write the moved (segmented) structure after flexible superposition.
 /// `chimera`: residues written in target order (as ICARUS does), otherwise in
 /// sequence order. Requires structures read with all atoms.
-pub fn write_moved_pdb<W: Write>(w: &mut W, aln: &Alignment, moving: &Prepared, chimera: bool) -> std::io::Result<()> {
+pub fn write_moved_pdb<W: Write>(
+    w: &mut W,
+    aln: &Alignment,
+    moving: &Prepared,
+    chimera: bool,
+) -> std::io::Result<()> {
     let s = &moving.s;
     let mut seg_of = vec![usize::MAX; s.len()];
     for (si, sg) in aln.segs.iter().enumerate() {
@@ -214,7 +420,14 @@ pub fn write_moved_pdb<W: Write>(w: &mut W, aln: &Alignment, moving: &Prepared, 
         } else {
             s.atoms[first[r]..first[r] + count[r]]
                 .iter()
-                .map(|a| (String::from_utf8_lossy(&a.name).to_string(), a.element, a.xyz, a.bfactor))
+                .map(|a| {
+                    (
+                        String::from_utf8_lossy(&a.name).to_string(),
+                        a.element,
+                        a.xyz,
+                        a.bfactor,
+                    )
+                })
                 .collect()
         };
         for (name, el, xyz, b) in atoms {
@@ -268,5 +481,10 @@ pub fn gdt(x: &[[f64; 3]], y: &[[f64; 3]], len: Option<usize>) -> GdtResult {
         s += tm::kernel(d * d, inv);
         out.push((i, j, d));
     }
-    GdtResult { tm: s / l as f64, tm_search: raw_s / size as f64, n_aligned: pairs.len(), pairs: out }
+    GdtResult {
+        tm: s / l as f64,
+        tm_search: raw_s / size as f64,
+        n_aligned: pairs.len(),
+        pairs: out,
+    }
 }

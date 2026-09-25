@@ -129,6 +129,9 @@ const FINALIZE_ITERS: usize = 3;
 /// Refit rounds and number of candidates DP-refined per body in a round.
 const REFIT_ROUNDS: usize = 2;
 const REFIT_CANDIDATES: usize = 3;
+/// Candidate assemblies (best per body count) fully finalised / refitted.
+const FINALIZED_SOLUTIONS: usize = 2;
+const REFITTED_SOLUTIONS: usize = 1;
 
 struct Ctx<'a> {
     q: &'a Prepared,
@@ -157,9 +160,19 @@ fn cmp_desc(a: f64, b: f64) -> std::cmp::Ordering {
 
 /// Iteratively reweighted superposition on fixed pairs: maximises
 /// sum 1/(1+d²/d0²) (minorise-maximise with weights 1/(1+d²/d0²)²).
-fn irls(q: &[V3], t: &[V3], pairs: &[(u32, u32)], tr0: Transform, inv_d02: f64, iters: usize) -> (Transform, f64) {
+fn irls(
+    q: &[V3],
+    t: &[V3],
+    pairs: &[(u32, u32)],
+    tr0: Transform,
+    inv_d02: f64,
+    iters: usize,
+) -> (Transform, f64) {
     let score = |tr: &Transform| -> f64 {
-        pairs.iter().map(|&(i, j)| tm::kernel(dist2(&tr.apply(&q[i as usize]), &t[j as usize]), inv_d02)).sum()
+        pairs
+            .iter()
+            .map(|&(i, j)| tm::kernel(dist2(&tr.apply(&q[i as usize]), &t[j as usize]), inv_d02))
+            .sum()
     };
     let mut best_tr = tr0;
     let mut best = score(&tr0);
@@ -191,14 +204,20 @@ fn irls(q: &[V3], t: &[V3], pairs: &[(u32, u32)], tr0: Transform, inv_d02: f64, 
 /// Closest-point polishing of a candidate superposition of residues s..=e,
 /// using the target grid (no sequence constraint). `occ` marks target
 /// residues that may not be used. Returns (grid score, transform).
-fn quick_refine(ctx: &Ctx, s: usize, e: usize, tr0: Transform, occ: Option<&[bool]>) -> (f32, Transform) {
+fn quick_refine(
+    ctx: &Ctx,
+    s: usize,
+    e: usize,
+    tr0: Transform,
+    occ: Option<&[bool]>,
+) -> (f32, Transform) {
     let q = &ctx.q.s.ca;
     let t = &ctx.t.s.ca;
     let score_of = |tr: &Transform| -> f32 {
         let mut sc = 0f32;
         for x in &q[s..=e] {
             let (d, j) = ctx.grid.lookup(&tr.apply(x));
-            if d != FAR && occ.map_or(true, |o| !o[j as usize]) {
+            if d != FAR && occ.is_none_or(|o| !o[j as usize]) {
                 sc += ctx.lut.v[d as usize];
             }
         }
@@ -215,7 +234,7 @@ fn quick_refine(ctx: &Ctx, s: usize, e: usize, tr0: Transform, occ: Option<&[boo
         ws.clear();
         for x in &q[s..=e] {
             let (d, j) = ctx.grid.lookup(&tr.apply(x));
-            if d != FAR && d < 60 && occ.map_or(true, |o| !o[j as usize]) {
+            if d != FAR && d < 60 && occ.is_none_or(|o| !o[j as usize]) {
                 let k = ctx.lut.v[d as usize] as f64;
                 xs.push(*x);
                 ys.push(t[j as usize]);
@@ -367,18 +386,35 @@ fn refine_placement(
                 if !fill_centers(&mut centers) {
                     break;
                 }
-                work.align_band_f(&x, tsoa, &centers, BAND_FIRST, ctx.inv_d02s as f32, -0.6, &mut pairs);
+                work.align_band_f(
+                    &x,
+                    tsoa,
+                    &centers,
+                    BAND_FIRST,
+                    ctx.inv_d02s as f32,
+                    -0.6,
+                    &mut pairs,
+                );
             }
         } else {
             // band around the previous alignment path
+            let Some(prev) = best.as_ref() else { break };
             centers.iter_mut().for_each(|c| *c = -1);
-            for &(i, j) in &best.as_ref().unwrap().2 {
+            for &(i, j) in &prev.2 {
                 centers[i as usize - s] = j as i32;
             }
             if !fill_centers(&mut centers) {
                 break;
             }
-            work.align_band_f(&x, tsoa, &centers, BAND, ctx.inv_d02s as f32, -0.6, &mut pairs);
+            work.align_band_f(
+                &x,
+                tsoa,
+                &centers,
+                BAND,
+                ctx.inv_d02s as f32,
+                -0.6,
+                &mut pairs,
+            );
         }
         if pairs.len() < 3 {
             break;
@@ -401,12 +437,27 @@ fn refine_placement(
     if ta == u32::MAX {
         return None;
     }
-    Some(Placement { node, tr, raw, ta, tb })
+    Some(Placement {
+        node,
+        tr,
+        raw,
+        ta,
+        tb,
+    })
 }
 
 /// Exact selection of disjoint PUs with non-overlapping target spans.
 /// Returns indices into `cands`.
-fn assemble(cands: &[Placement], tree_masks: &[u32], n_leaves: usize, max_segments: usize, penalty: f64) -> Vec<usize> {
+/// Returns, for each number of bodies k = 1..=max_segments that admits a
+/// solution, the best selection (indices into `cands`) with its proxy score.
+fn assemble(
+    cands: &[Placement],
+    tree_masks: &[u32],
+    n_leaves: usize,
+    max_segments: usize,
+    penalty: f64,
+    f: &mut Vec<f32>,
+) -> Vec<(f64, Vec<usize>)> {
     let nc = cands.len();
     if nc == 0 {
         return vec![];
@@ -415,18 +466,25 @@ fn assemble(cands: &[Placement], tree_masks: &[u32], n_leaves: usize, max_segmen
     order.sort_by_key(|&c| (cands[c].tb, cands[c].ta));
     let ends: Vec<u32> = order.iter().map(|&c| cands[c].tb).collect();
     // prev[k] = number of sorted candidates whose end is < start of candidate k
-    let prev: Vec<usize> = order.iter().map(|&c| ends.partition_point(|&b| b < cands[c].ta)).collect();
+    let prev: Vec<usize> = order
+        .iter()
+        .map(|&c| ends.partition_point(|&b| b < cands[c].ta))
+        .collect();
     let nm = 1usize << n_leaves;
     let ks = max_segments.max(1);
-    let neg = f64::NEG_INFINITY;
+    let neg = f32::NEG_INFINITY;
     let stride_k = nm;
     let stride_i = (ks + 1) * nm;
-    let mut f = vec![neg; (nc + 1) * stride_i];
+    // row 0 initialised here; row i is copied from row i-1 before use
+    f.clear();
+    f.resize(stride_i, neg);
+    f.resize((nc + 1) * stride_i, 0.0);
     f[0] = 0.0;
+    let penalty = penalty as f32;
     for i in 1..=nc {
         let c = order[i - 1];
         let mc = tree_masks[cands[c].node] as usize;
-        let w = cands[c].raw;
+        let w = cands[c].raw as f32;
         let p = prev[i - 1];
         let (before, cur) = f.split_at_mut(i * stride_i);
         cur[..stride_i].copy_from_slice(&before[(i - 1) * stride_i..i * stride_i]);
@@ -454,32 +512,36 @@ fn assemble(cands: &[Placement], tree_masks: &[u32], n_leaves: usize, max_segmen
         }
     }
     let base = nc * stride_i;
-    let (mut bk, mut bm, mut bv) = (0usize, 0usize, 0.0f64);
-    for k in 1..=ks {
+    let mut out = Vec::new();
+    for kk in 1..=ks {
+        let (mut bm, mut bv) = (usize::MAX, 0.0f32);
         for mask in 0..nm {
-            let v = f[base + k * stride_k + mask];
+            let v = f[base + kk * stride_k + mask];
             if v > bv {
                 bv = v;
-                bk = k;
                 bm = mask;
             }
         }
-    }
-    let mut chosen = Vec::new();
-    let (mut i, mut k, mut mask) = (nc, bk, bm);
-    while i > 0 && k > 0 {
-        let v = f[i * stride_i + k * stride_k + mask];
-        if v == f[(i - 1) * stride_i + k * stride_k + mask] {
-            i -= 1;
+        if bm == usize::MAX {
             continue;
         }
-        let c = order[i - 1];
-        chosen.push(c);
-        mask ^= tree_masks[cands[c].node] as usize;
-        k -= 1;
-        i = prev[i - 1];
+        let mut chosen = Vec::new();
+        let (mut i, mut k, mut mask) = (nc, kk, bm);
+        while i > 0 && k > 0 {
+            let v = f[i * stride_i + k * stride_k + mask];
+            if v == f[(i - 1) * stride_i + k * stride_k + mask] {
+                i -= 1;
+                continue;
+            }
+            let c = order[i - 1];
+            chosen.push(c);
+            mask ^= tree_masks[cands[c].node] as usize;
+            k -= 1;
+            i = prev[i - 1];
+        }
+        out.push((bv as f64, chosen));
     }
-    chosen
+    out
 }
 
 /// One pass: chimera of the bodies in target order, aligned with the gdt2 DP.
@@ -487,7 +549,11 @@ fn chimera_align(ctx: &Ctx, segs: &[Segment], keys: &[f64], work: &mut DpWork) -
     let q = &ctx.q.s.ca;
     let t = &ctx.t.s.ca;
     let mut order: Vec<usize> = (0..segs.len()).collect();
-    order.sort_by(|&a, &b| keys[a].partial_cmp(&keys[b]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|&a, &b| {
+        keys[a]
+            .partial_cmp(&keys[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut chim: Vec<V3> = Vec::with_capacity(q.len());
     let mut origin: Vec<(u32, u16)> = Vec::with_capacity(q.len());
     for &si in &order {
@@ -507,7 +573,13 @@ fn chimera_align(ctx: &Ctx, segs: &[Segment], keys: &[f64], work: &mut DpWork) -
         out_pairs.push((origin[ci as usize].0, tj));
         out_seg.push(origin[ci as usize].1);
     }
-    Alignment { segs: segs.to_vec(), order, pairs: out_pairs, pair_seg: out_seg, raw }
+    Alignment {
+        segs: segs.to_vec(),
+        order,
+        pairs: out_pairs,
+        pair_seg: out_seg,
+        raw,
+    }
 }
 
 /// Chimera alignment, then re-superpose each body on its own pairs; iterate
@@ -523,8 +595,13 @@ fn finalize(ctx: &Ctx, mut segs: Vec<Segment>, mut keys: Vec<f64>, work: &mut Dp
         }
         best = aln;
         for (si, sg) in segs.iter_mut().enumerate() {
-            let sp: Vec<(u32, u32)> =
-                best.pairs.iter().zip(&best.pair_seg).filter(|(_, &s)| s as usize == si).map(|(p, _)| *p).collect();
+            let sp: Vec<(u32, u32)> = best
+                .pairs
+                .iter()
+                .zip(&best.pair_seg)
+                .filter(|(_, &s)| s as usize == si)
+                .map(|(p, _)| *p)
+                .collect();
             if sp.len() >= 3 {
                 let (ntr, _) = irls(q, t, &sp, sg.tr, ctx.inv_d02, 3);
                 sg.tr = ntr;
@@ -623,12 +700,19 @@ fn segment_keys_from(ctx: &Ctx, segs: &[Segment], aln: &Alignment) -> Vec<f64> {
             .pairs
             .iter()
             .zip(&aln.pair_seg)
-            .filter(|(&(i, j), &sg)| sg as usize == si && dist2(&tr.apply(&q[i as usize]), &t[j as usize]) < 25.0)
+            .filter(|(&(i, j), &sg)| {
+                sg as usize == si && dist2(&tr.apply(&q[i as usize]), &t[j as usize]) < 25.0
+            })
             .map(|(&(_, j), _)| j)
             .collect();
         keys[si] = if js.is_empty() {
-            let own: Vec<u32> =
-                aln.pairs.iter().zip(&aln.pair_seg).filter(|(_, &sg)| sg as usize == si).map(|(&(_, j), _)| j).collect();
+            let own: Vec<u32> = aln
+                .pairs
+                .iter()
+                .zip(&aln.pair_seg)
+                .filter(|(_, &sg)| sg as usize == si)
+                .map(|(&(_, j), _)| j)
+                .collect();
             if own.is_empty() {
                 rank as f64 * t.len() as f64 / segs.len().max(1) as f64
             } else {
@@ -644,7 +728,13 @@ fn segment_keys_from(ctx: &Ctx, segs: &[Segment], aln: &Alignment) -> Vec<f64> {
 
 /// Try to move body `b` to a better place among the target residues not used
 /// by the other bodies. Returns the re-aligned solution if it scores higher.
-fn refit_body(ctx: &Ctx, aln: &Alignment, b: usize, cands_all: &[(usize, f64, Transform)], work: &mut DpWork) -> Option<Alignment> {
+fn refit_body(
+    ctx: &Ctx,
+    aln: &Alignment,
+    b: usize,
+    cands_all: &[(usize, f64, Transform)],
+    work: &mut DpWork,
+) -> Option<Alignment> {
     let q = &ctx.q.s.ca;
     let t = &ctx.t.s.ca;
     let (qs, qe) = (aln.segs[b].qs, aln.segs[b].qe);
@@ -675,7 +765,11 @@ fn refit_body(ctx: &Ctx, aln: &Alignment, b: usize, cands_all: &[(usize, f64, Tr
         .collect();
     polished.sort_by(|a, b| cmp_desc(a.0 as f64, b.0 as f64));
     let far = [1.0e4, 1.0e4, 1.0e4];
-    let tmask: Vec<V3> = t.iter().zip(&occ).map(|(p, &o)| if o { far } else { *p }).collect();
+    let tmask: Vec<V3> = t
+        .iter()
+        .zip(&occ)
+        .map(|(p, &o)| if o { far } else { *p })
+        .collect();
     let tmask_soa = SoA::new(&tmask);
     let mut sigs: Vec<[V3; 3]> = vec![];
     let mut best: Option<Placement> = None;
@@ -684,12 +778,15 @@ fn refit_body(ctx: &Ctx, aln: &Alignment, b: usize, cands_all: &[(usize, f64, Tr
             break;
         }
         let sig = [tr.apply(&q[qs]), tr.apply(&q[mid]), tr.apply(&q[qe])];
-        if sigs.iter().any(|o| (0..3).all(|k| dist2(&o[k], &sig[k]) < 16.0)) {
+        if sigs
+            .iter()
+            .any(|o| (0..3).all(|k| dist2(&o[k], &sig[k]) < 16.0))
+        {
             continue;
         }
         sigs.push(sig);
         if let Some(pl) = refine_placement(ctx, 0, qs, qe, tr, &tmask, &tmask_soa, work) {
-            if best.as_ref().map_or(true, |bp| pl.raw > bp.raw) {
+            if best.as_ref().is_none_or(|bp| pl.raw > bp.raw) {
                 best = Some(pl);
             }
         }
@@ -707,7 +804,13 @@ fn refit_body(ctx: &Ctx, aln: &Alignment, b: usize, cands_all: &[(usize, f64, Tr
 }
 
 /// Align a peeled query onto a rigid target. Returns (flexible, rigid).
-fn align_directional(q: &Prepared, t: &Prepared, lnorm: usize, p: &AlignParams, work: &mut DpWork) -> (Alignment, Alignment) {
+fn align_directional(
+    q: &Prepared,
+    t: &Prepared,
+    lnorm: usize,
+    p: &AlignParams,
+    work: &mut DpWork,
+) -> (Alignment, Alignment) {
     let prof = std::env::var_os("ICARUS_PROFILE").is_some();
     let clock = std::time::Instant::now();
     let lap = |name: &str| {
@@ -733,13 +836,23 @@ fn align_directional(q: &Prepared, t: &Prepared, lnorm: usize, p: &AlignParams, 
     let nn = tree.nodes.len();
 
     // 1. seeds
-    let blocks = select_blocks(find_blocks(&q.frags, &t.frags, p.q_stride, p.frag_tol), m, p.max_seeds);
-    let mut transforms: Vec<Transform> = blocks.iter().map(|b| block_transform(qca, tca, b)).collect();
+    let blocks = select_blocks(
+        find_blocks(&q.frags, &t.frags, p.q_stride, p.frag_tol),
+        m,
+        p.max_seeds,
+    );
+    let mut transforms: Vec<Transform> = blocks
+        .iter()
+        .map(|b| block_transform(qca, tca, b))
+        .collect();
     if transforms.is_empty() {
         // no local similarity at all: fall back to centroid alignment
         let cq = centroid(qca);
         let ct = centroid(tca);
-        transforms.push(Transform { r: Transform::identity().r, t: [ct[0] - cq[0], ct[1] - cq[1], ct[2] - cq[2]] });
+        transforms.push(Transform {
+            r: Transform::identity().r,
+            t: [ct[0] - cq[0], ct[1] - cq[1], ct[2] - cq[2]],
+        });
     }
     lap(&format!("grid + {} seed blocks", transforms.len()));
 
@@ -792,7 +905,12 @@ fn align_directional(q: &Prepared, t: &Prepared, lnorm: usize, p: &AlignParams, 
         let mid = (s + e) / 2;
         let mut cands: Vec<Transform> = Vec::new();
         if let Some(par) = node.parent {
-            cands.extend(node_placements[par].iter().take(2).map(|&k| placements[k].tr));
+            cands.extend(
+                node_placements[par]
+                    .iter()
+                    .take(2)
+                    .map(|&k| placements[k].tr),
+            );
         }
         let n_inherited = cands.len();
         cands.extend(top[ni].iter().map(|&(_, ti)| transforms[ti as usize]));
@@ -804,7 +922,10 @@ fn align_directional(q: &Prepared, t: &Prepared, lnorm: usize, p: &AlignParams, 
                 break;
             }
             let sig = [tr.apply(&qca[s]), tr.apply(&qca[mid]), tr.apply(&qca[e])];
-            if sigs.iter().any(|o| (0..3).all(|k| dist2(&o[k], &sig[k]) < SAME_CANDIDATE_D2)) {
+            if sigs
+                .iter()
+                .any(|o| (0..3).all(|k| dist2(&o[k], &sig[k]) < SAME_CANDIDATE_D2))
+            {
                 continue;
             }
             sigs.push(sig);
@@ -818,7 +939,8 @@ fn align_directional(q: &Prepared, t: &Prepared, lnorm: usize, p: &AlignParams, 
         let mut kept: Vec<Placement> = Vec::new();
         for pl in node_best {
             let dup = kept.iter().any(|k| {
-                dist2(&k.tr.apply(&qca[mid]), &pl.tr.apply(&qca[mid])) < 4.0 && k.tr.rotation_angle_to(&pl.tr) < 0.2
+                dist2(&k.tr.apply(&qca[mid]), &pl.tr.apply(&qca[mid])) < 4.0
+                    && k.tr.rotation_angle_to(&pl.tr) < 0.2
             });
             if !dup {
                 kept.push(pl);
@@ -833,13 +955,26 @@ fn align_directional(q: &Prepared, t: &Prepared, lnorm: usize, p: &AlignParams, 
             placements.push(pl);
         }
     }
-    lap(&format!("refined {} placements over {} PUs", placements.len(), nn));
+    lap(&format!(
+        "refined {} placements over {} PUs",
+        placements.len(),
+        nn
+    ));
 
     // rigid solution: best whole-chain placement
     let rigid = match node_placements[0].first() {
         Some(&k) => {
             let pl = &placements[k];
-            finalize(&ctx, vec![Segment { qs: 0, qe: m - 1, tr: pl.tr }], vec![pl.ta as f64], work)
+            finalize(
+                &ctx,
+                vec![Segment {
+                    qs: 0,
+                    qe: m - 1,
+                    tr: pl.tr,
+                }],
+                vec![pl.ta as f64],
+                work,
+            )
         }
         None => Alignment::default(),
     };
@@ -851,70 +986,119 @@ fn align_directional(q: &Prepared, t: &Prepared, lnorm: usize, p: &AlignParams, 
     // 4. assemble rigid bodies
     let masks: Vec<u32> = tree.nodes.iter().map(|n| n.leaf_mask).collect();
     let penalty = p.hinge_penalty * lnorm as f64;
-    let chosen = assemble(&placements, &masks, tree.leaves.len(), p.max_segments, penalty);
-    if chosen.is_empty() {
+    let solutions = assemble(
+        &placements,
+        &masks,
+        tree.leaves.len(),
+        p.max_segments,
+        penalty,
+        &mut work.asm,
+    );
+    lap(&format!(
+        "assembly DP ({} placements, {} leaves)",
+        placements.len(),
+        tree.leaves.len()
+    ));
+    if solutions.is_empty() {
         return (rigid.clone(), rigid);
     }
-    let mut segs: Vec<(Segment, f64)> = chosen
-        .iter()
-        .map(|&c| {
-            let pl = &placements[c];
-            let nd = &tree.nodes[pl.node];
-            (Segment { qs: nd.start, qe: nd.end, tr: pl.tr }, (pl.ta as f64 + pl.tb as f64) / 2.0)
+    // finalise the best selection of every body count, keep the best two
+    let mut finals: Vec<Alignment> = Vec::new();
+    for (_, chosen) in &solutions {
+        let mut segs: Vec<(Segment, f64)> = chosen
+            .iter()
+            .map(|&c| {
+                let pl = &placements[c];
+                let nd = &tree.nodes[pl.node];
+                (
+                    Segment {
+                        qs: nd.start,
+                        qe: nd.end,
+                        tr: pl.tr,
+                    },
+                    (pl.ta as f64 + pl.tb as f64) / 2.0,
+                )
+            })
+            .collect();
+        segs.sort_by_key(|(s, _)| s.qs);
+        // attach unplaced residues (PUs without a placement) to a neighbouring body
+        attach_gaps(&ctx, &mut segs, m);
+        let keys: Vec<f64> = segs.iter().map(|(_, k)| *k).collect();
+        let segs: Vec<Segment> = segs.into_iter().map(|(s, _)| s).collect();
+        // one chimera pass to rank the candidate solutions
+        finals.push(chimera_align(&ctx, &segs, &keys, work));
+    }
+    let obj = |a: &Alignment| a.raw - penalty * (a.segs.len().max(1) - 1) as f64;
+    finals.sort_by(|a, b| cmp_desc(obj(a), obj(b)));
+    finals.truncate(FINALIZED_SOLUTIONS);
+    let mut finals: Vec<Alignment> = finals
+        .into_iter()
+        .map(|a| {
+            let keys = segment_keys_from(&ctx, &a.segs, &a);
+            let f = finalize(&ctx, a.segs.clone(), keys, work);
+            if f.raw >= a.raw {
+                f
+            } else {
+                a
+            }
         })
         .collect();
-    segs.sort_by_key(|(s, _)| s.qs);
-    // attach unplaced residues (PUs without a placement) to a neighbouring body
-    attach_gaps(&ctx, &mut segs, m);
-    lap(&format!("assembly ({} bodies)", segs.len()));
-    let keys: Vec<f64> = segs.iter().map(|(_, k)| *k).collect();
-    let segs: Vec<Segment> = segs.into_iter().map(|(s, _)| s).collect();
-    let mut flex = finalize(&ctx, segs, keys, work);
-    lap(&format!("flex finalize raw={:.2}", flex.raw));
-
-    // 5. refit bodies against the free target
-    if p.refit && flex.segs.len() > 1 {
-        let mut changed = false;
-        for _round in 0..REFIT_ROUNDS {
-            let mut improved = false;
-            for b in 0..flex.segs.len() {
-                if let Some(trial) = refit_body(&ctx, &flex, b, &refit_pool, work) {
-                    flex = trial;
-                    improved = true;
-                    changed = true;
+    finals.sort_by(|a, b| cmp_desc(obj(a), obj(b)));
+    finals.truncate(REFITTED_SOLUTIONS);
+    lap(&format!(
+        "assembly + finalize ({} candidate solutions)",
+        solutions.len()
+    ));
+    let mut best_flex: Option<Alignment> = None;
+    for mut flex in finals {
+        // 5. refit bodies against the free target
+        if p.refit && flex.segs.len() > 1 {
+            let mut changed = false;
+            for _round in 0..REFIT_ROUNDS {
+                let mut improved = false;
+                for b in 0..flex.segs.len() {
+                    if let Some(trial) = refit_body(&ctx, &flex, b, &refit_pool, work) {
+                        flex = trial;
+                        improved = true;
+                        changed = true;
+                    }
+                }
+                if !improved {
+                    break;
                 }
             }
-            if !improved {
-                break;
+            if changed {
+                let keys = segment_keys_from(&ctx, &flex.segs, &flex);
+                let refined = finalize(&ctx, flex.segs.clone(), keys, work);
+                if refined.raw > flex.raw {
+                    flex = refined;
+                }
             }
-        }
-        if changed {
-            let keys = segment_keys_from(&ctx, &flex.segs, &flex);
-            let refined = finalize(&ctx, flex.segs.clone(), keys, work);
-            if refined.raw > flex.raw {
-                flex = refined;
-            }
-        }
-        lap(&format!("refit raw={:.2}", flex.raw));
-    }
-    {
-        for _ in 0..2 {
-            let before = flex.raw;
-            flex = refine_hinges(&ctx, flex, work);
-            if flex.raw <= before + 1e-6 {
-                break;
-            }
+            lap(&format!("refit raw={:.2}", flex.raw));
         }
         {
-            let keys = segment_keys_from(&ctx, &flex.segs, &flex);
-            let f2 = finalize(&ctx, flex.segs.clone(), keys, work);
-            if f2.raw > flex.raw {
-                flex = f2;
+            for _ in 0..2 {
+                let before = flex.raw;
+                flex = refine_hinges(&ctx, flex, work);
+                if flex.raw <= before + 1e-6 {
+                    break;
+                }
             }
+            {
+                let keys = segment_keys_from(&ctx, &flex.segs, &flex);
+                let f2 = finalize(&ctx, flex.segs.clone(), keys, work);
+                if f2.raw > flex.raw {
+                    flex = f2;
+                }
+            }
+            lap(&format!("hinges raw={:.2}", flex.raw));
         }
-        lap(&format!("hinges raw={:.2}", flex.raw));
+        if best_flex.as_ref().is_none_or(|b| obj(&flex) > obj(b)) {
+            best_flex = Some(flex);
+        }
     }
-    if flex.raw >= rigid.raw {
+    let flex = best_flex.unwrap();
+    if obj(&flex) >= rigid.raw {
         (flex, rigid)
     } else {
         (rigid.clone(), rigid)
@@ -937,7 +1121,9 @@ fn centroid(x: &[V3]) -> V3 {
 fn attach_gaps(ctx: &Ctx, segs: &mut [(Segment, f64)], m: usize) {
     let q = &ctx.q.s.ca;
     let score = |tr: &Transform, a: usize, b: usize| -> f32 {
-        (a..=b).map(|i| ctx.lut.v[ctx.grid.lookup(&tr.apply(&q[i])).0 as usize]).sum()
+        (a..=b)
+            .map(|i| ctx.lut.v[ctx.grid.lookup(&tr.apply(&q[i])).0 as usize])
+            .sum()
     };
     let k = segs.len();
     if k == 0 {
@@ -955,8 +1141,16 @@ fn attach_gaps(ctx: &Ctx, segs: &mut [(Segment, f64)], m: usize) {
         let gap_e = gap_e - 1;
         let mut best = (f32::MIN, gap_s);
         for cut in gap_s..=gap_e + 1 {
-            let left = if cut > gap_s { score(&segs[i].0.tr, gap_s, cut - 1) } else { 0.0 };
-            let right = if cut <= gap_e { score(&segs[i + 1].0.tr, cut, gap_e) } else { 0.0 };
+            let left = if cut > gap_s {
+                score(&segs[i].0.tr, gap_s, cut - 1)
+            } else {
+                0.0
+            };
+            let right = if cut <= gap_e {
+                score(&segs[i + 1].0.tr, cut, gap_e)
+            } else {
+                0.0
+            };
             if left + right > best.0 {
                 best = (left + right, cut);
             }

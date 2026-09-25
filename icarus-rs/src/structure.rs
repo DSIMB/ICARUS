@@ -81,7 +81,11 @@ impl Structure {
             }
         }
         fn filt<T: Clone>(v: &[T], keep: &[bool]) -> Vec<T> {
-            v.iter().zip(keep).filter(|(_, &k)| k).map(|(x, _)| x.clone()).collect()
+            v.iter()
+                .zip(keep)
+                .filter(|(_, &k)| k)
+                .map(|(x, _)| x.clone())
+                .collect()
         }
         self.seq = filt(&self.seq, &keep);
         self.resn = filt(&self.resn, &keep);
@@ -194,7 +198,12 @@ fn parse_pdb_atoms(reader: Box<dyn BufRead>) -> Result<Vec<RawAtom>> {
             continue;
         }
         let field = |a: usize, b: usize| -> &[u8] { &line[a.min(line.len())..b.min(line.len())] };
-        let s = |a: usize, b: usize| std::str::from_utf8(field(a, b)).unwrap_or("").trim().to_string();
+        let s = |a: usize, b: usize| {
+            std::str::from_utf8(field(a, b))
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
         let resnum: i32 = match s(22, 26).parse() {
             Ok(v) => v,
             Err(_) => continue,
@@ -248,7 +257,9 @@ fn cif_tokens(line: &str) -> Vec<String> {
             let q = b[i];
             let start = i + 1;
             let mut j = start;
-            while j < b.len() && !(b[j] == q && (j + 1 == b.len() || b[j + 1].is_ascii_whitespace())) {
+            while j < b.len()
+                && !(b[j] == q && (j + 1 == b.len() || b[j + 1].is_ascii_whitespace()))
+            {
                 j += 1;
             }
             out.push(line[start..j.min(b.len())].to_string());
@@ -275,28 +286,46 @@ fn parse_cif_atoms(reader: Box<dyn BufRead>) -> Result<Vec<RawAtom>> {
     let mut map: Vec<Option<usize>> = Vec::new();
     for line in reader.lines() {
         let line = line?;
-        if line.starts_with("_atom_site.") {
+        if let Some(col) = line.strip_prefix("_atom_site.") {
             if !in_header {
                 cols.clear();
             }
             in_header = true;
-            cols.push(line["_atom_site.".len()..].trim().to_string());
+            cols.push(col.trim().to_string());
             continue;
         }
         if in_header {
             in_header = false;
             in_loop = true;
             let names = [
-                "group_PDB", "type_symbol", "label_atom_id", "auth_atom_id", "label_alt_id", "label_comp_id",
-                "auth_comp_id", "label_asym_id", "auth_asym_id", "label_seq_id", "auth_seq_id",
-                "pdbx_PDB_ins_code", "Cartn_x", "Cartn_y", "Cartn_z", "B_iso_or_equiv", "pdbx_PDB_model_num",
+                "group_PDB",
+                "type_symbol",
+                "label_atom_id",
+                "auth_atom_id",
+                "label_alt_id",
+                "label_comp_id",
+                "auth_comp_id",
+                "label_asym_id",
+                "auth_asym_id",
+                "label_seq_id",
+                "auth_seq_id",
+                "pdbx_PDB_ins_code",
+                "Cartn_x",
+                "Cartn_y",
+                "Cartn_z",
+                "B_iso_or_equiv",
+                "pdbx_PDB_model_num",
             ];
             map = names.iter().map(|n| idx(&cols, n)).collect();
         }
         if !in_loop {
             continue;
         }
-        if line.starts_with('#') || line.starts_with("loop_") || line.starts_with('_') || line.starts_with("data_") {
+        if line.starts_with('#')
+            || line.starts_with("loop_")
+            || line.starts_with('_')
+            || line.starts_with("data_")
+        {
             if !atoms.is_empty() || line.starts_with('#') {
                 break;
             }
@@ -307,7 +336,8 @@ fn parse_cif_atoms(reader: Box<dyn BufRead>) -> Result<Vec<RawAtom>> {
             continue;
         }
         let tok = std::mem::take(&mut pending);
-        let get = |k: usize| -> Option<&str> { map[k].and_then(|c| tok.get(c)).map(|s| s.as_str()) };
+        let get =
+            |k: usize| -> Option<&str> { map[k].and_then(|c| tok.get(c)).map(|s| s.as_str()) };
         if let Some(model) = get(16) {
             match &first_model {
                 None => first_model = Some(model.to_string()),
@@ -351,7 +381,9 @@ fn parse_cif_atoms(reader: Box<dyn BufRead>) -> Result<Vec<RawAtom>> {
         }
         // PDB-style atom name alignment: names shorter than 4 start at column 14
         let nb = name.as_bytes();
-        let aname = if nb.len() >= 4 || (element[0] != b' ' && nb.len() > 1 && element[0] == nb[0] && element[1] == nb[1]) {
+        let aname = if nb.len() >= 4
+            || (element[0] != b' ' && nb.len() > 1 && element[0] == nb[0] && element[1] == nb[1])
+        {
             pad4_atom(nb)
         } else {
             let mut o = [b' '; 4];
@@ -387,15 +419,24 @@ fn sniff_cif(path: &Path) -> Result<bool> {
     let mut buf = vec![0u8; 4096];
     let n = r.read(&mut buf)?;
     let head = String::from_utf8_lossy(&buf[..n]);
-    Ok(head.trim_start().starts_with("data_") || head.contains("\n_atom_site.") || head.contains("\nloop_"))
+    Ok(head.trim_start().starts_with("data_")
+        || head.contains("\n_atom_site.")
+        || head.contains("\nloop_"))
 }
 
 /// Parse a structure file. `chain`: author chain id to select (None = first
 /// protein chain). `keep_atoms`: retain all atoms (needed to write models).
 pub fn read_structure(path: &Path, chain: Option<&str>, keep_atoms: bool) -> Result<Structure> {
     let cif = is_cif(path) || (!path.to_string_lossy().contains(".pdb") && sniff_cif(path)?);
-    let raw = if cif { parse_cif_atoms(open_text(path)?)? } else { parse_pdb_atoms(open_text(path)?)? };
-    let mut name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let raw = if cif {
+        parse_cif_atoms(open_text(path)?)?
+    } else {
+        parse_pdb_atoms(open_text(path)?)?
+    };
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     for ext in [".gz", ".pdb", ".cif", ".ent", ".mmcif"] {
         if let Some(stripped) = name.strip_suffix(ext) {
             name = stripped.to_string();
@@ -404,7 +445,12 @@ pub fn read_structure(path: &Path, chain: Option<&str>, keep_atoms: bool) -> Res
     build(name, raw, chain, keep_atoms).with_context(|| format!("while reading {}", path.display()))
 }
 
-fn build(name: String, raw: Vec<RawAtom>, chain: Option<&str>, keep_atoms: bool) -> Result<Structure> {
+fn build(
+    name: String,
+    raw: Vec<RawAtom>,
+    chain: Option<&str>,
+    keep_atoms: bool,
+) -> Result<Structure> {
     // Pick the chain: requested one, or the first chain that holds an amino acid CA.
     let chain_id = match chain {
         Some(c) => c.to_string(),
@@ -414,7 +460,11 @@ fn build(name: String, raw: Vec<RawAtom>, chain: Option<&str>, keep_atoms: bool)
             .map(|a| a.chain.clone())
             .unwrap_or_default(),
     };
-    let mut s = Structure { name, chain: chain_id.clone(), ..Default::default() };
+    let mut s = Structure {
+        name,
+        chain: chain_id.clone(),
+        ..Default::default()
+    };
     let mut cur: Option<(i32, u8)> = None;
     let mut cur_alt: u8 = b' ';
     let mut res_atoms: Vec<&RawAtom> = Vec::new();
@@ -429,17 +479,40 @@ fn build(name: String, raw: Vec<RawAtom>, chain: Option<&str>, keep_atoms: bool)
             let idx = s.ca.len() as u32;
             s.ca.push(ca);
             s.seq.push(aa);
-            s.resn.push(if a0.hetatm && aa != b'X' { mapped_resn(aa) } else { a0.resn });
-            s.resid.push(ResId { num: a0.resnum, icode: a0.icode });
-            s.bfac.push(res_atoms.iter().find(|a| &a.name == b" CA ").map_or(0.0, |a| a.bfactor));
-            s.backbone.push(Backbone { n: find(b" N  "), ca: Some(ca), c: find(b" C  "), o: find(b" O  ") });
+            s.resn.push(if a0.hetatm && aa != b'X' {
+                mapped_resn(aa)
+            } else {
+                a0.resn
+            });
+            s.resid.push(ResId {
+                num: a0.resnum,
+                icode: a0.icode,
+            });
+            s.bfac.push(
+                res_atoms
+                    .iter()
+                    .find(|a| &a.name == b" CA ")
+                    .map_or(0.0, |a| a.bfactor),
+            );
+            s.backbone.push(Backbone {
+                n: find(b" N  "),
+                ca: Some(ca),
+                c: find(b" C  "),
+                o: find(b" O  "),
+            });
             if keep_atoms {
                 for a in res_atoms.iter() {
                     let mut nm = a.name;
                     if a.hetatm && &a.resn == b"MSE" && &nm == b"SE  " {
                         nm = *b" SD ";
                     }
-                    s.atoms.push(Atom { res: idx, name: nm, element: a.element, xyz: a.xyz, bfactor: a.bfactor });
+                    s.atoms.push(Atom {
+                        res: idx,
+                        name: nm,
+                        element: a.element,
+                        xyz: a.xyz,
+                        bfactor: a.bfactor,
+                    });
                 }
             }
         }
@@ -477,17 +550,40 @@ fn build(name: String, raw: Vec<RawAtom>, chain: Option<&str>, keep_atoms: bool)
     }
     flush(&mut res_atoms, &mut s);
     if s.ca.is_empty() {
-        bail!("no protein residue with a CA atom found (chain '{}')", chain_id);
+        bail!(
+            "no protein residue with a CA atom found (chain '{}')",
+            chain_id
+        );
     }
     Ok(s)
 }
 
 fn mapped_resn(aa: u8) -> [u8; 3] {
     let names: [(&[u8; 3], u8); 20] = [
-        (b"ALA", b'A'), (b"ARG", b'R'), (b"ASN", b'N'), (b"ASP", b'D'), (b"CYS", b'C'),
-        (b"GLN", b'Q'), (b"GLU", b'E'), (b"GLY", b'G'), (b"HIS", b'H'), (b"ILE", b'I'),
-        (b"LEU", b'L'), (b"LYS", b'K'), (b"MET", b'M'), (b"PHE", b'F'), (b"PRO", b'P'),
-        (b"SER", b'S'), (b"THR", b'T'), (b"TRP", b'W'), (b"TYR", b'Y'), (b"VAL", b'V'),
+        (b"ALA", b'A'),
+        (b"ARG", b'R'),
+        (b"ASN", b'N'),
+        (b"ASP", b'D'),
+        (b"CYS", b'C'),
+        (b"GLN", b'Q'),
+        (b"GLU", b'E'),
+        (b"GLY", b'G'),
+        (b"HIS", b'H'),
+        (b"ILE", b'I'),
+        (b"LEU", b'L'),
+        (b"LYS", b'K'),
+        (b"MET", b'M'),
+        (b"PHE", b'F'),
+        (b"PRO", b'P'),
+        (b"SER", b'S'),
+        (b"THR", b'T'),
+        (b"TRP", b'W'),
+        (b"TYR", b'Y'),
+        (b"VAL", b'V'),
     ];
-    names.iter().find(|(_, c)| *c == aa).map(|(n, _)| **n).unwrap_or(*b"UNK")
+    names
+        .iter()
+        .find(|(_, c)| *c == aa)
+        .map(|(n, _)| **n)
+        .unwrap_or(*b"UNK")
 }

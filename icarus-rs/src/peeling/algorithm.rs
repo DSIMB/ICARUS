@@ -91,7 +91,10 @@ pub fn build_cutting_mask(ss_types: &[SsType], min_ss_size: usize) -> Vec<bool> 
         if ss_types[i] != SsType::Coil && current_ss == SsType::Coil {
             current_ss = ss_types[i];
             segment_start = i;
-        } else if ss_types[i] != current_ss && ss_types[i] != SsType::Coil && current_ss != SsType::Coil {
+        } else if ss_types[i] != current_ss
+            && ss_types[i] != SsType::Coil
+            && current_ss != SsType::Coil
+        {
             close(i - 1, segment_start, &mut small);
             current_ss = ss_types[i];
             segment_start = i;
@@ -152,7 +155,17 @@ fn simple_cutting(
         let coeff = (a * b - c * c) / denom;
         if coeff > best_coeff {
             best_coeff = coeff;
-            best = Some(CutResult { coeff, num_cuts: 1, pu_index, start: pu_start, i1: i, i2: i + 1, j1: 0, j2: 0, end: pu_end });
+            best = Some(CutResult {
+                coeff,
+                num_cuts: 1,
+                pu_index,
+                start: pu_start,
+                i1: i,
+                i2: i + 1,
+                j1: 0,
+                j2: 0,
+                end: pu_end,
+            });
         }
     }
     best
@@ -212,7 +225,17 @@ fn double_cutting(
             let coeff = (a * b - c * c) / denom;
             if coeff > best_coeff {
                 best_coeff = coeff;
-                best = Some(CutResult { coeff, num_cuts: 2, pu_index, start: pu_start, i1: i, i2, j1: j, j2, end: pu_end });
+                best = Some(CutResult {
+                    coeff,
+                    num_cuts: 2,
+                    pu_index,
+                    start: pu_start,
+                    i1: i,
+                    i2,
+                    j1: j,
+                    j2,
+                    end: pu_end,
+                });
             }
         }
     }
@@ -316,11 +339,27 @@ pub fn run_peeling(ca: &[[f64; 3]], ss: &[SsType], config: &PeelingConfig) -> Ve
             if end - start + 1 < config.min_pu_size {
                 continue;
             }
-            if let Some(cut) = simple_cutting(&matrix, start, end, &mask, config.min_pu_size, best_coeff, x) {
+            if let Some(cut) = simple_cutting(
+                &matrix,
+                start,
+                end,
+                &mask,
+                config.min_pu_size,
+                best_coeff,
+                x,
+            ) {
                 best_coeff = cut.coeff;
                 best_cut = Some(cut);
             }
-            if let Some(cut) = double_cutting(&matrix, start, end, &mask, config.min_pu_size, best_coeff, x) {
+            if let Some(cut) = double_cutting(
+                &matrix,
+                start,
+                end,
+                &mask,
+                config.min_pu_size,
+                best_coeff,
+                x,
+            ) {
                 best_coeff = cut.coeff;
                 best_cut = Some(cut);
             }
@@ -343,8 +382,8 @@ pub fn run_peeling(ca: &[[f64; 3]], ss: &[SsType], config: &PeelingConfig) -> Ve
         if new_pus.len() > config.max_pu_number {
             break;
         }
-        let reached_max_size = config.max_pu_size > 0
-            && new_pus.iter().all(|&[s, e]| e - s + 1 <= config.max_pu_size);
+        let reached_max_size =
+            config.max_pu_size > 0 && new_pus.iter().all(|&[s, e]| e - s < config.max_pu_size);
         if config.pruning {
             let h = |s, e| homogeneity(&matrix, s, e) >= config.cutoff_pruning;
             let ok = if cut.num_cuts == 1 {
@@ -357,7 +396,10 @@ pub fn run_peeling(ca: &[[f64; 3]], ss: &[SsType], config: &PeelingConfig) -> Ve
             }
         }
         let ci = compaction_index(&matrix, &new_pus);
-        iterations.push(Iteration { ci, pus: new_pus.clone() });
+        iterations.push(Iteration {
+            ci,
+            pus: new_pus.clone(),
+        });
         current = new_pus;
         if reached_max_size || ci > config.max_r2 as f64 {
             break;

@@ -75,7 +75,9 @@ impl<'a> Rd<'a> {
 }
 
 pub fn write_db(path: &Path, items: &[Prepared]) -> Result<()> {
-    let mut w = BufWriter::new(File::create(path).with_context(|| format!("cannot create {}", path.display()))?);
+    let mut w = BufWriter::new(
+        File::create(path).with_context(|| format!("cannot create {}", path.display()))?,
+    );
     w.write_all(MAGIC)?;
     w_u32(&mut w, VERSION)?;
     w_u32(&mut w, items.len() as u32)?;
@@ -130,7 +132,8 @@ pub fn write_db(path: &Path, items: &[Prepared]) -> Result<()> {
 
 pub fn read_db(path: &Path) -> Result<Vec<Prepared>> {
     let mut buf = Vec::new();
-    BufReader::new(File::open(path).with_context(|| format!("cannot open {}", path.display()))?).read_to_end(&mut buf)?;
+    BufReader::new(File::open(path).with_context(|| format!("cannot open {}", path.display()))?)
+        .read_to_end(&mut buf)?;
     let mut r = Rd { b: &buf, p: 0 };
     if r.take(4)? != MAGIC {
         bail!("{} is not an ICARUS database", path.display());
@@ -204,8 +207,27 @@ pub fn read_db(path: &Path) -> Result<Vec<Prepared>> {
             levels.push(lv);
         }
         let frags = fragment_signatures(&ca);
-        let s = Structure { name, chain, seq, resn, ca, resid, bfac, backbone: vec![], atoms: vec![] };
-        out.push(Prepared { s, ss, tree: PuTree { nodes, leaves, levels }, frags });
+        let s = Structure {
+            name,
+            chain,
+            seq,
+            resn,
+            ca,
+            resid,
+            bfac,
+            backbone: vec![],
+            atoms: vec![],
+        };
+        out.push(Prepared {
+            s,
+            ss,
+            tree: PuTree {
+                nodes,
+                leaves,
+                levels,
+            },
+            frags,
+        });
     }
     Ok(out)
 }

@@ -32,10 +32,6 @@ impl PuSpan {
     pub fn len(&self) -> usize {
         self.end - self.start + 1
     }
-
-    pub fn is_empty(&self) -> bool {
-        false
-    }
 }
 
 #[cfg(test)]

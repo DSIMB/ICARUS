@@ -16,7 +16,11 @@ use icarus::prep::{prepare, PrepParams, Prepared};
 use icarus::structure::read_structure;
 
 #[derive(Parser)]
-#[command(name = "icarus", version, about = "ICARUS: fast flexible protein structural alignment based on Protein Units")]
+#[command(
+    name = "icarus",
+    version,
+    about = "ICARUS: fast flexible protein structural alignment based on Protein Units"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -63,7 +67,10 @@ struct AlignOpts {
 impl AlignOpts {
     fn params(&self) -> (PrepParams, AlignParams) {
         (
-            PrepParams { min_pu_size: self.min_pu_size, max_leaves: self.max_pus.clamp(1, 16) },
+            PrepParams {
+                min_pu_size: self.min_pu_size,
+                max_leaves: self.max_pus.clamp(1, 16),
+            },
             AlignParams {
                 max_segments: self.max_bodies.max(1),
                 hinge_penalty: self.hinge_penalty,
@@ -160,6 +167,9 @@ enum Cmd {
         /// Only report pairs with a flexible TM-score >= this value
         #[arg(long, default_value_t = 0.0)]
         min_tm: f64,
+        /// Add a column with the superposition of every rigid body
+        #[arg(long)]
+        transforms: bool,
         /// Threads (0 = all cores)
         #[arg(short, long, default_value_t = 0)]
         threads: usize,
@@ -181,7 +191,16 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Align { structure1, structure2, chain1, chain2, out_pdb, sequence_order, tsv, opts } => {
+        Cmd::Align {
+            structure1,
+            structure2,
+            chain1,
+            chain2,
+            out_pdb,
+            sequence_order,
+            tsv,
+            opts,
+        } => {
             let (pp, ap) = opts.params();
             let keep = out_pdb.is_some();
             let t0 = Instant::now();
@@ -208,13 +227,27 @@ fn main() -> Result<()> {
                 output::write_moved_pdb(&mut w, &r.flex, mv, !sequence_order)?;
             }
         }
-        Cmd::Pairs { pairs, dir, ext, output: out, models, threads, opts } => {
+        Cmd::Pairs {
+            pairs,
+            dir,
+            ext,
+            output: out,
+            models,
+            threads,
+            opts,
+        } => {
             if threads > 0 {
-                rayon::ThreadPoolBuilder::new().num_threads(threads).build_global().ok();
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build_global()
+                    .ok();
             }
             let (pp, ap) = opts.params();
             let list = read_pairs(&pairs)?;
-            let mut ids: Vec<String> = list.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).collect();
+            let mut ids: Vec<String> = list
+                .iter()
+                .flat_map(|(a, b)| [a.clone(), b.clone()])
+                .collect();
             ids.sort();
             ids.dedup();
             let keep = models.is_some();
@@ -275,9 +308,17 @@ fn main() -> Result<()> {
                 lines.len() as f64 / (t2 - t1).as_secs_f64().max(1e-9)
             );
         }
-        Cmd::Createdb { input, output, threads, opts } => {
+        Cmd::Createdb {
+            input,
+            output,
+            threads,
+            opts,
+        } => {
             if threads > 0 {
-                rayon::ThreadPoolBuilder::new().num_threads(threads).build_global().ok();
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build_global()
+                    .ok();
             }
             let (pp, _) = opts.params();
             let files = collect_files(&input)?;
@@ -302,21 +343,47 @@ fn main() -> Result<()> {
                 output.display()
             );
         }
-        Cmd::Search { query_db, target_db, pairs, output: out, min_tm, threads, opts } => {
+        Cmd::Search {
+            query_db,
+            target_db,
+            pairs,
+            output: out,
+            min_tm,
+            transforms,
+            threads,
+            opts,
+        } => {
             if threads > 0 {
-                rayon::ThreadPoolBuilder::new().num_threads(threads).build_global().ok();
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build_global()
+                    .ok();
             }
             let (_, ap) = opts.params();
             let t0 = Instant::now();
             let same = query_db == target_db;
             let qs = read_db(&query_db)?;
-            let ts = if same { Vec::new() } else { read_db(&target_db)? };
+            let ts = if same {
+                Vec::new()
+            } else {
+                read_db(&target_db)?
+            };
             let tset: &Vec<Prepared> = if same { &qs } else { &ts };
-            let qidx: HashMap<&str, usize> = qs.iter().enumerate().map(|(i, p)| (p.s.name.as_str(), i)).collect();
-            let tidx: HashMap<&str, usize> = tset.iter().enumerate().map(|(i, p)| (p.s.name.as_str(), i)).collect();
+            let qidx: HashMap<&str, usize> = qs
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.s.name.as_str(), i))
+                .collect();
+            let tidx: HashMap<&str, usize> = tset
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.s.name.as_str(), i))
+                .collect();
             let lookup = |m: &HashMap<&str, usize>, n: &str| -> Option<usize> {
                 let n = strip_name(n);
-                m.get(n.as_str()).copied().or_else(|| n.rsplit_once('_').and_then(|(a, _)| m.get(a).copied()))
+                m.get(n.as_str())
+                    .copied()
+                    .or_else(|| n.rsplit_once('_').and_then(|(a, _)| m.get(a).copied()))
             };
             let list: Vec<(usize, usize)> = match &pairs {
                 Some(p) => {
@@ -332,16 +399,31 @@ fn main() -> Result<()> {
                     v.dedup();
                     v
                 }
-                None if same => (0..qs.len()).flat_map(|i| (i + 1..qs.len()).map(move |j| (i, j))).collect(),
-                None => (0..qs.len()).flat_map(|i| (0..tset.len()).map(move |j| (i, j))).collect(),
+                None if same => (0..qs.len())
+                    .flat_map(|i| (i + 1..qs.len()).map(move |j| (i, j)))
+                    .collect(),
+                None => (0..qs.len())
+                    .flat_map(|i| (0..tset.len()).map(move |j| (i, j)))
+                    .collect(),
             };
             let t1 = Instant::now();
-            eprintln!("loaded {} + {} structures in {:.2} s; {} pairs to align", qs.len(), tset.len(), (t1 - t0).as_secs_f64(), list.len());
+            eprintln!(
+                "loaded {} + {} structures in {:.2} s; {} pairs to align",
+                qs.len(),
+                tset.len(),
+                (t1 - t0).as_secs_f64(),
+                list.len()
+            );
             let mut w: Box<dyn Write> = match &out {
                 Some(p) => Box::new(BufWriter::new(std::fs::File::create(p)?)),
                 None => Box::new(BufWriter::new(std::io::stdout())),
             };
-            writeln!(w, "{}\tms", output::TSV_HEADER)?;
+            writeln!(
+                w,
+                "{}\tms{}",
+                output::TSV_HEADER,
+                if transforms { "\ttransforms" } else { "" }
+            )?;
             let mut done = 0usize;
             let mut kept = 0usize;
             for chunk in list.chunks(20_000) {
@@ -354,7 +436,11 @@ fn main() -> Result<()> {
                         if r.tm_flex() < min_tm {
                             return None;
                         }
-                        Some(format!("{}\t{:.2}", output::tsv_line(&r, a, b), ts.elapsed().as_secs_f64() * 1e3))
+                        Some(format!(
+                            "{}\t{:.2}",
+                            output::tsv_line(&r, a, b),
+                            ts.elapsed().as_secs_f64() * 1e3
+                        ))
                     })
                     .flatten()
                     .collect();
@@ -364,11 +450,20 @@ fn main() -> Result<()> {
                 done += chunk.len();
                 kept += lines.len();
                 let el = t1.elapsed().as_secs_f64();
-                eprintln!("  {done}/{} pairs ({:.1} pairs/s), {kept} reported", list.len(), done as f64 / el.max(1e-9));
+                eprintln!(
+                    "  {done}/{} pairs ({:.1} pairs/s), {kept} reported",
+                    list.len(),
+                    done as f64 / el.max(1e-9)
+                );
             }
             w.flush()?;
         }
-        Cmd::Gdt { structure1, structure2, len, pairs } => {
+        Cmd::Gdt {
+            structure1,
+            structure2,
+            len,
+            pairs,
+        } => {
             let a = read_structure(&structure1, None, false)?;
             let b = read_structure(&structure2, None, false)?;
             let g = output::gdt(&a.ca, &b.ca, len);
@@ -379,15 +474,36 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Peel { structure, chain, min_pu_size, max_pus } => {
+        Cmd::Peel {
+            structure,
+            chain,
+            min_pu_size,
+            max_pus,
+        } => {
             let s = read_structure(&structure, chain.as_deref(), false)?;
-            let p = prepare(s, &PrepParams { min_pu_size, max_leaves: max_pus });
+            let p = prepare(
+                s,
+                &PrepParams {
+                    min_pu_size,
+                    max_leaves: max_pus,
+                },
+            );
             println!("{} residues; secondary structure:", p.len());
-            println!("{}", p.ss.iter().map(|&c| if c == ' ' { '-' } else { c }).collect::<String>());
+            println!(
+                "{}",
+                p.ss.iter()
+                    .map(|&c| if c == ' ' { '-' } else { c })
+                    .collect::<String>()
+            );
             for (lvl, nodes) in p.tree.levels.iter().enumerate() {
                 let spans: Vec<String> = nodes
                     .iter()
-                    .map(|&n| format!("{}-{}", p.s.resid[p.tree.nodes[n].start], p.s.resid[p.tree.nodes[n].end]))
+                    .map(|&n| {
+                        format!(
+                            "{}-{}",
+                            p.s.resid[p.tree.nodes[n].start], p.s.resid[p.tree.nodes[n].end]
+                        )
+                    })
                     .collect();
                 println!("level {lvl}: {} PUs  {}", nodes.len(), spans.join(" "));
             }
@@ -396,11 +512,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn load(path: &Path, chain: Option<&str>, keep: bool, opts: &AlignOpts) -> Result<icarus::structure::Structure> {
+fn load(
+    path: &Path,
+    chain: Option<&str>,
+    keep: bool,
+    opts: &AlignOpts,
+) -> Result<icarus::structure::Structure> {
     let mut s = read_structure(path, chain, keep)?;
     if let Some(t) = opts.min_plddt {
         s.mask_low_confidence(t);
-        anyhow::ensure!(s.len() >= 10, "fewer than 10 residues left after pLDDT masking");
+        anyhow::ensure!(
+            s.len() >= 10,
+            "fewer than 10 residues left after pLDDT masking"
+        );
     }
     Ok(s)
 }
@@ -408,7 +532,19 @@ fn load(path: &Path, chain: Option<&str>, keep: bool, opts: &AlignOpts) -> Resul
 fn is_structure_file(p: &Path) -> bool {
     let s = p.to_string_lossy().to_ascii_lowercase();
     let s = s.strip_suffix(".gz").unwrap_or(&s);
-    [".pdb", ".cif", ".ent", ".mmcif"].iter().any(|e| s.ends_with(e))
+    if [".pdb", ".cif", ".ent", ".mmcif"]
+        .iter()
+        .any(|e| s.ends_with(e))
+    {
+        return true;
+    }
+    // other names (e.g. SCOP/ASTRAL domain files "d1abca_", "d1apy.1") are
+    // accepted unless they carry an obviously non-structural extension
+    let deny = [
+        ".txt", ".tsv", ".csv", ".json", ".md", ".log", ".m8", ".icdb", ".fasta", ".fa", ".py",
+        ".sh", ".tar", ".zip", ".dbtype", ".index", ".lookup", ".source",
+    ];
+    !deny.iter().any(|e| s.ends_with(e))
 }
 
 fn collect_files(input: &Path) -> Result<Vec<PathBuf>> {
@@ -437,7 +573,11 @@ fn collect_files(input: &Path) -> Result<Vec<PathBuf>> {
     out.sort();
     // one file per structure name (e.g. AFDB ships both .cif.gz and .pdb.gz)
     let mut seen = std::collections::HashSet::new();
-    out.retain(|p| seen.insert(strip_name(&p.file_name().unwrap_or_default().to_string_lossy())));
+    out.retain(|p| {
+        seen.insert(strip_name(
+            &p.file_name().unwrap_or_default().to_string_lossy(),
+        ))
+    });
     Ok(out)
 }
 

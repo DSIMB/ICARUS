@@ -46,6 +46,8 @@ fn kernel_row(xi: &V3, y: &SoA, lo: usize, hi: usize, inv_d02: f32, row: &mut [f
 /// Reusable DP buffers.
 #[derive(Default)]
 pub struct DpWork {
+    /// Scratch table reused by the rigid-body assembly DP.
+    pub asm: Vec<f32>,
     rowf: Vec<f32>,
     prevf: Vec<f32>,
     curf: Vec<f32>,
@@ -74,7 +76,16 @@ impl DpWork {
 
     /// f32 version of `align_gap_open` against target residues lo..hi of `y`.
     /// Returned pairs index the full target.
-    pub fn align_gap_open_f(&mut self, x: &[V3], y: &SoA, lo: usize, hi: usize, inv_d02: f32, gap_open: f32, out: &mut Vec<(u32, u32)>) -> f32 {
+    pub fn align_gap_open_f(
+        &mut self,
+        x: &[V3],
+        y: &SoA,
+        lo: usize,
+        hi: usize,
+        inv_d02: f32,
+        gap_open: f32,
+        out: &mut Vec<(u32, u32)>,
+    ) -> f32 {
         let (m, n) = (x.len(), hi - lo);
         self.prepare_f(m, n);
         let w = n + 1;
@@ -119,7 +130,13 @@ impl DpWork {
     }
 
     /// f32 version of `align_free` (gdt2 DP) against the full target.
-    pub fn align_free_f(&mut self, x: &[V3], y: &SoA, inv_d02: f32, out: &mut Vec<(u32, u32)>) -> f32 {
+    pub fn align_free_f(
+        &mut self,
+        x: &[V3],
+        y: &SoA,
+        inv_d02: f32,
+        out: &mut Vec<(u32, u32)>,
+    ) -> f32 {
         let (m, n) = (x.len(), y.len());
         self.prepare_f(m, n);
         let w = n + 1;
@@ -154,7 +171,16 @@ impl DpWork {
     /// non-decreasing. Local semantics (free end gaps anywhere). Pairs index
     /// the full target.
     #[allow(clippy::too_many_arguments)]
-    pub fn align_band_f(&mut self, x: &[V3], y: &SoA, centers: &[i32], band: usize, inv_d02: f32, gap_open: f32, out: &mut Vec<(u32, u32)>) -> f32 {
+    pub fn align_band_f(
+        &mut self,
+        x: &[V3],
+        y: &SoA,
+        centers: &[i32],
+        band: usize,
+        inv_d02: f32,
+        gap_open: f32,
+        out: &mut Vec<(u32, u32)>,
+    ) -> f32 {
         let m = x.len();
         let n = y.len() as i32;
         let w = 2 * band + 1;
@@ -185,7 +211,13 @@ impl DpWork {
         self.diag_prev.resize(n as usize + 1, false);
         self.diag_cur.clear();
         self.diag_cur.resize(n as usize + 1, false);
-        let wmax = hi.iter().zip(&lo).map(|(h, l)| (h - l) as usize).max().unwrap_or(0).max(w);
+        let wmax = hi
+            .iter()
+            .zip(&lo)
+            .map(|(h, l)| (h - l) as usize)
+            .max()
+            .unwrap_or(0)
+            .max(w);
         self.trace.clear();
         self.trace.resize(m * wmax, 0);
         self.rowf.clear();
@@ -200,9 +232,17 @@ impl DpWork {
                 let ju = j as usize;
                 let s = self.rowf[(j - l) as usize];
                 // predecessors (row i-1 valid in [plo, phi))
-                let dprev = if i > 0 && j - 1 >= plo && j - 1 < phi { self.prevf[ju - 1] } else { neg };
+                let dprev = if i > 0 && j > plo && j - 1 < phi {
+                    self.prevf[ju - 1]
+                } else {
+                    neg
+                };
                 let d = dprev.max(0.0) + s;
-                let mut hup = if i > 0 && j >= plo && j < phi { self.prevf[ju] } else { neg };
+                let mut hup = if i > 0 && j >= plo && j < phi {
+                    self.prevf[ju]
+                } else {
+                    neg
+                };
                 if hup != neg && self.diag_prev[ju] {
                     hup += gap_open;
                 }
@@ -213,7 +253,11 @@ impl DpWork {
                 let t = if d >= hup && d >= vl {
                     self.diag_cur[ju] = true;
                     self.curf[ju] = d;
-                    if dprev > 0.0 { DIAG } else { 4 } // 4 = alignment start
+                    if dprev > 0.0 {
+                        DIAG
+                    } else {
+                        4
+                    } // 4 = alignment start
                 } else if hup >= vl {
                     self.diag_cur[ju] = false;
                     self.curf[ju] = hup;
@@ -297,7 +341,14 @@ impl DpWork {
 
     /// TM-align style DP: a gap costs `gap_open` when it opens after a match,
     /// extensions are free, and end gaps are free. Returns aligned (i, j) pairs.
-    pub fn align_gap_open(&mut self, x: &[V3], y: &[V3], inv_d02: f64, gap_open: f64, out: &mut Vec<(u32, u32)>) -> f64 {
+    pub fn align_gap_open(
+        &mut self,
+        x: &[V3],
+        y: &[V3],
+        inv_d02: f64,
+        gap_open: f64,
+        out: &mut Vec<(u32, u32)>,
+    ) -> f64 {
         let (m, n) = (x.len(), y.len());
         self.prepare(m, n);
         let w = n + 1;
@@ -346,7 +397,13 @@ impl DpWork {
     /// Gap-penalty-free DP maximising the kernel sum (the alignment step of
     /// gdt2.pl, used by ICARUS to score flexible alignments). Tie-breaking
     /// follows gdt2.pl: diagonal first, then left if up <= left.
-    pub fn align_free(&mut self, x: &[V3], y: &[V3], inv_d02: f64, out: &mut Vec<(u32, u32)>) -> f64 {
+    pub fn align_free(
+        &mut self,
+        x: &[V3],
+        y: &[V3],
+        inv_d02: f64,
+        out: &mut Vec<(u32, u32)>,
+    ) -> f64 {
         let (m, n) = (x.len(), y.len());
         self.prepare(m, n);
         let w = n + 1;

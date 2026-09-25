@@ -12,7 +12,11 @@ pub fn d0(l: usize) -> f64 {
 /// d0 used to *search* alignments (TM-align / gdt2.pl convention):
 /// d0 + 0.8 clamped to [4.5, 8] Å.
 pub fn d0_search(l: usize) -> f64 {
-    let base = if l <= 19 { 0.168 } else { (1.24 * ((l as f64) - 15.0).cbrt() - 1.8).max(0.5) };
+    let base = if l <= 19 {
+        0.168
+    } else {
+        (1.24 * ((l as f64) - 15.0).cbrt() - 1.8).max(0.5)
+    };
     (base + 0.8).clamp(4.5, 8.0)
 }
 

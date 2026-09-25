@@ -61,7 +61,8 @@ pub fn assign(backbone: &[Backbone], aa: &[u8]) -> Vec<char> {
                 let co = prev.c - prev.o;
                 let l = (co.x * co.x + co.y * co.y + co.z * co.z).sqrt();
                 if l > 0.0 {
-                    res.h = Point3D::new(res.n.x + co.x / l, res.n.y + co.y / l, res.n.z + co.z / l);
+                    res.h =
+                        Point3D::new(res.n.x + co.x / l, res.n.y + co.y / l, res.n.z + co.z / l);
                     res.has_h = true;
                 }
             }
