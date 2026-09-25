@@ -35,13 +35,25 @@ icarus pairs pairs.tsv --dir structures/ --ext .pdb -o results.tsv -t 16
 # proteome scale: preprocess once, then align candidate pairs
 icarus createdb AFDB_proteome_dir/ proteome.icdb --min-plddt 70
 foldseek easy-search AFDB_proteome_dir/ AFDB_proteome_dir/ hits.m8 tmp --exhaustive-search 0
-icarus search proteome.icdb proteome.icdb --pairs hits.m8 -o flexible.tsv --min-rigid 0.3
+icarus search proteome.icdb proteome.icdb --pairs hits.m8 -o flexible.tsv --min-rigid 0.3 \
+    --fast --hinge-penalty 0.02
 ```
+
+`pipeline/proteome_flexdb.sh STRUCT_DIR OUT_DIR [threads] [min_plddt] [min_rigid_tm]`
+runs the whole flow (preprocessing, Foldseek prefilter, flexible alignment).
 
 Main options: `--max-bodies` (maximum number of rigid bodies, default 6),
 `--hinge-penalty` (TM-score cost per extra body), `--min-pu-size` (default 15),
-`--one-direction` (peel only the first structure; ~2× faster),
+`--one-direction` (peel only the first structure; ~2× faster), `--fast`
+(one direction and a smaller seed/candidate budget; ~2.5× faster),
 `--min-plddt` (mask low-confidence residues of predicted models).
+
+For a database, use `--hinge-penalty 0.02`: each extra rigid body must then
+improve the TM-score by 0.02. The mean TM-score on RIPC drops only from 0.755
+to 0.738, but solutions are simpler (4.4 instead of 5.6 bodies on average) and
+easier to interpret. For example, NarL vs RcsB from *E. coli* comes out as two
+bodies (receiver domain + HTH domain, TM 0.87 vs 0.24 rigid) instead of six
+shuffled β-α units.
 
 ### Output columns (`pairs`, `search`)
 

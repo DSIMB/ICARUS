@@ -5,7 +5,10 @@
 #
 # usage: proteome_flexdb.sh STRUCT_DIR OUT_DIR [threads] [min_plddt] [min_rigid_tm]
 # env:   ICARUS (default: icarus), FOLDSEEK (default: foldseek),
-#        FOLDSEEK_ARGS (extra search arguments, default: -e 10 --max-seqs 1000)
+#        FOLDSEEK_ARGS (extra search arguments, default: -e 10 --max-seqs 1000),
+#        ICARUS_ARGS (extra alignment arguments, default: --fast --hinge-penalty 0.02:
+#        one peeling direction, and each extra rigid body must gain 0.02 TM-score,
+#        which keeps solutions interpretable, e.g. two domains around one hinge)
 set -euo pipefail
 IN=$1
 OUT=$2
@@ -15,6 +18,7 @@ MINTM=${5:-0.0}
 ICARUS=${ICARUS:-icarus}
 FOLDSEEK=${FOLDSEEK:-foldseek}
 FOLDSEEK_ARGS=${FOLDSEEK_ARGS:--e 10 --max-seqs 1000}
+ICARUS_ARGS=${ICARUS_ARGS:---fast --hinge-penalty 0.02}
 FS_THREADS=$THREADS
 [ "$FS_THREADS" = "0" ] && FS_THREADS=$(nproc)
 mkdir -p "$OUT"
@@ -38,5 +42,5 @@ log "   $(wc -l < "$OUT/candidates.m8") candidate hits"
 
 log "3/3 flexible alignment of candidate pairs (reporting rigid TM >= $MINTM)"
 "$ICARUS" search "$OUT/structures.icdb" "$OUT/structures.icdb" --pairs "$OUT/candidates.m8" \
-    --min-rigid "$MINTM" -t "$THREADS" --transforms -o "$OUT/flexible_alignments.tsv" 2> >(tee "$OUT/search.log" >&2)
+    --min-rigid "$MINTM" -t "$THREADS" --transforms $ICARUS_ARGS -o "$OUT/flexible_alignments.tsv" 2> >(tee "$OUT/search.log" >&2)
 log "done: $OUT/flexible_alignments.tsv"
